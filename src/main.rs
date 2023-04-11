@@ -16,12 +16,19 @@ fn main() {
         let address = decode_hex_u16((line[3], line[4], line[5], line[6])).unwrap();
 
         let record_type = decode_hex_u8((line[7], line[8])).unwrap();
+
+        let mut i = 9;
+        let mut next = || {
+            let v = i;
+            i += 1;
+            v
+        };
         match record_type {
             // data record
             0 => {
+                println!("addr=0x{address:x}, bytes={byte_count}");
                 for i in 0..byte_count {
-                    let b =
-                        decode_hex_u8((line[(9 + i) as usize], line[(10 + i) as usize])).unwrap();
+                    let b = decode_hex_u8((line[next() as usize], line[next() as usize])).unwrap();
                     if decoded.len() <= (address + i as u16) as usize {
                         let needs = (address + i as u16) as usize - decoded.len() + 1;
                         for _ in 0..needs {
@@ -39,13 +46,14 @@ fn main() {
         }
     }
 
-    'outer: for i in (0..decoded.len()).step_by(16) {
-        for j in 0..16 {
-            let Some(b) = decoded.get(i * 16 + j) else { break 'outer };
-            print!("{b:02x}");
+    for (i, &b) in decoded.iter().enumerate() {
+        if i % 32 == 0 {
+            println!();
+            print!("{i:05x}: ");
         }
-        println!();
+        print!("{b:02x} ");
     }
+    println!();
 }
 
 fn decode_hex_char(c: char) -> Option<u8> {
