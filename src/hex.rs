@@ -92,13 +92,18 @@ impl<R: Read> HexDecoder<R> {
                 _ => return Err(Error::UnknownRecordType { found: record_type }),
             }
 
+            // FIXME: verify this
             let _checksum = self.decode_hex_u8();
 
             self.reader.read_exact(&mut buf).map_err(Error::Io)?;
             if buf == [b'\r'] {
                 self.reader.read_exact(&mut buf).map_err(Error::Io)?;
             }
-            assert_eq!(buf, [b'\n']);
+            if buf != [b'\n'] {
+                return Err(Error::InvalidNewLine {
+                    found: buf[0] as char,
+                });
+            }
         }
 
         Ok(decoded)
