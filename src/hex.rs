@@ -1,6 +1,7 @@
 use std::io::{self, Read};
 
-pub struct HexDecoder<R> {
+/// decoder for https://ja.wikipedia.org/wiki/Intel_HEX
+pub struct IntelHexDecoder<R> {
     reader: R,
 }
 
@@ -24,7 +25,7 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-impl<R: Read> HexDecoder<R> {
+impl<R: Read> IntelHexDecoder<R> {
     pub fn new(reader: R) -> Self {
         Self { reader }
     }
@@ -110,6 +111,6 @@ impl<R: Read> HexDecoder<R> {
     }
 }
 
-pub fn decode_hex<R: Read>(r: R) -> Result<Vec<u8>> {
-    HexDecoder::new(r).decode()
+pub fn decode_intel_hex<R: Read>(r: R) -> Result<Vec<u8>> {
+    IntelHexDecoder::new(r).decode()
 }

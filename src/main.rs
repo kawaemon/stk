@@ -2,10 +2,10 @@ mod hex;
 
 use std::{fs::File, io::BufReader};
 
-use crate::hex::decode_hex;
+use crate::hex::decode_intel_hex;
 
 fn main() {
-    let decoded = decode_hex(BufReader::new(File::open("./out.hex").unwrap())).unwrap();
+    let decoded = decode_intel_hex(BufReader::new(File::open("./out.hex").unwrap())).unwrap();
 
     for (i, &b) in decoded.iter().enumerate() {
         if i % 32 == 0 {
