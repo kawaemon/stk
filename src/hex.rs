@@ -1,6 +1,6 @@
 use std::io::{self, Read};
 
-/// decoder for https://ja.wikipedia.org/wiki/Intel_HEX
+/// decoder for <https://ja.wikipedia.org/wiki/Intel_HEX>
 pub struct IntelHexDecoder<R> {
     reader: R,
 }
