@@ -167,7 +167,6 @@ impl ProgramAddr {
 
 #[derive(Debug)]
 pub struct BitIndex(u8);
-
 impl BitIndex {
     pub fn new(i: u8) -> Self {
         assert!(i < 8);
@@ -177,7 +176,9 @@ impl BitIndex {
 
 #[derive(Debug)]
 pub enum Destination {
+    /// Destination is W register
     W,
+    /// Destination is the register pointed by f operand
     F,
 }
 
@@ -200,41 +201,53 @@ enum Instruction {
         k: u8,
     },
 
+    /// ```
     /// 0 -> *f, 1 -> Z
-    /// affected: Z
+    /// ```
+    /// - affects: Z
     #[doc(alias = "clrf")]
     ClearF {
         f: RegisterFileAddr,
     },
 
+    /// ```
     /// 0 -> W, 1 -> Z
-    /// affected: Z
+    /// ```
+    /// - affected: Z
     #[doc(alias = "clrw")]
     ClearW,
 
+    /// ```
     /// W -> *f
-    /// affects: None
+    /// ```
+    /// - affects: None
     #[doc(alias = "movwf")]
     MoveWtoF {
         f: RegisterFileAddr,
     },
 
+    /// ```
     /// no-operation
-    /// affects: None
+    /// ```
+    /// - affects: None
     Noop,
 
+    /// ```
     /// addr -> PC<10:0>
     /// PCLATH<4:3> -> PC<12:11>
-    /// affects: None
+    /// ```
+    /// - affects: None
     Goto {
         addr: ProgramAddr,
     },
 
+    /// ```
     /// PC + 1 -> TOS
     /// addr -> PC
     /// PCLATH<4:3> -> PC<12:11>
-    /// affects: None
-    /// cycles: 2
+    /// ```
+    /// - affects: None
+    /// - cycles: 2
     Call {
         addr: ProgramAddr,
     },
@@ -245,8 +258,10 @@ enum Instruction {
     #[doc(alias = "retfie")]
     ReturnFromInterrupt,
 
+    /// ```
     /// TOS -> PC
-    /// cycles: 2
+    /// ```
+    /// - cycles: 2
     Return,
 
     Sleep,
@@ -254,116 +269,148 @@ enum Instruction {
 
 #[derive(Debug)]
 pub enum ByteOrientedOperation {
+    /// ```
     /// W + *f -> destination
-    /// affects: C, DC, Z
+    /// ```
+    /// - affects: C, DC, Z
     AddWf,
 
+    /// ```
     /// W & *f -> destination
-    /// affects: Z
+    /// ```
+    /// - affects: Z
     AndWf,
 
+    /// ```
     /// Complement f (1's complement?)
-    /// affects: Z
+    /// ```
+    /// - affects: Z
     #[doc(alias = "comf")]
     ComplementF,
 
+    /// ```
     /// *f - 1 -> destination
-    /// affects: Z
+    /// ```
+    /// - affects: Z
     #[doc(alias = "decf")]
     DecrementF,
 
+    /// ```
     /// *f - 1 -> destination
-    /// affects: None
-    /// cycles: 2 if *f == 1, otherwise 1
-    ///
     /// if (*f - 1) == 0 {
     ///     nop;
     ///     PC += 1; // skip next instruction
     /// }
+    /// ```
+    /// - affects: None
+    /// - cycles: 2 if *f == 1, otherwise 1
     #[doc(alias = "decfsz")]
     DecrementFSkipIfZ,
 
     /// *f + 1 -> destination
-    /// affects: Z
+    /// - affects: Z
     #[doc(alias = "incf")]
     IncrementF,
 
+    /// ```
     /// *f + 1 -> destination
-    /// affects: None
-    /// cycles: 2 if *f == 0xff, otherwise 1
-    ///
     /// if (*f + 1) == 0 {
     ///     nop;
     ///     PC += 1; // skip next instruction
     /// }
+    /// ```
+    /// - affects: None
+    /// - cycles: 2 if *f == 0xff, otherwise 1
     #[doc(alias = "incfsz")]
     IncrementFSkipIfZ,
 
+    /// ```
     /// W | *f -> W
-    /// affects: Z
+    /// ```
+    /// - affects: Z
     #[doc(alias = "iorwf")]
     OrWf,
 
+    /// ```
     /// *f -> destination
-    /// affects: Z
+    /// ```
+    /// - affects: Z
     #[doc(alias = "movf")]
     MoveF,
 
+    /// ```
     /// rotate left F through Carry flag
     ///  <- C <- *f <-
-    /// affects: C
+    /// ```
+    /// - affects: C
     #[doc(alias = "rlf")]
     RotateLeftFThroughCarry,
 
+    /// ```
     /// rotate right F through Carry flag
     ///  -> C -> *f ->
-    /// affects: C
+    /// ```
+    /// - affects: C
     #[doc(alias = "rrf")]
     RotateRightFThroughCarry,
 
+    /// ```
     /// *f - W -> destination
-    /// affects: C, DC, Z
+    /// ```
+    /// - affects: C, DC, Z
     #[doc(alias = "subwf")]
     SubtractWfromF,
 
+    /// ```
     /// *f<3:0> -> destination<7:4>
     /// *f<7:4> -> destination<3:0>
-    /// affects: None
+    /// ```
+    /// - affects: None
     SwapF,
 
+    /// ```
     /// W ^ *f -> destination
-    /// affects: Z
+    /// ```
+    /// - affects: Z
     #[doc(alias = "xorwf")]
     XorWwithF,
 }
 
 #[derive(Debug)]
 pub enum BitOrientedOperation {
+    /// ```
     /// 0 -> f<b>
-    /// affects: None
+    /// ```
+    /// - affects: None
     #[doc(alias = "bcf")]
     BitClearF,
 
+    /// ```
     /// 1 -> f<b>
-    /// affects: None
+    /// ```
+    /// - affects: None
     #[doc(alias = "bsf")]
     BitSetF,
 
+    /// ```
     /// if *f<b> == 0 {
     ///     nop;
     ///     PC += 1; // skip next instruction
     /// }
-    /// affects: None
-    /// cycles: 2 if skip, otherwise 1
+    /// ```
+    /// - affects: None
+    /// - cycles: 2 if skip, otherwise 1
     #[doc(alias = "btfsc")]
     SkipIfFBitClear,
 
+    /// ```
     /// if *f<b> == 1 {
     ///     nop;
     ///     PC += 1; // skip next instruction
     /// }
-    /// affects: None
-    /// cycles: 2 if skip, otherwise 1
+    /// ```
+    /// - affects: None
+    /// - cycles: 2 if skip, otherwise 1
     #[doc(alias = "btfss")]
     SkipIfFBitSet,
 }
