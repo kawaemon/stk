@@ -117,26 +117,3 @@ for line, addr in zip(data.split("\n"), addrs.split(" ")):
     segments = line.split(" ")
     print(f"{segments[0]:10s} {addr} {masks(segments[1] + segments[2])}")
 
-print()
-print("# is_gpr")
-
-continuous = []
-for a in addrs.split(" "):
-    a = int(a[len("0x"):], base=16)
-    if len(continuous) == 0:
-        continuous.append(a)
-        continue
-
-    last = len(continuous) - 1
-    if continuous[last] + 1 == a:
-        continuous.append(a)
-        continue
-
-    if len(continuous) == 1:
-        print(f"0x{continuous[0]:04x} ||")
-    else:
-        print(f"0x{continuous[0]:04x}..=0x{continuous[last]:04x} ||")
-
-    continuous.clear()
-    continuous.append(a)
-

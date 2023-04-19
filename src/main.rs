@@ -3,6 +3,7 @@ use std::{fs::File, io::BufReader};
 use stk::{hex::decode_intel_hex, inst::Instruction};
 
 fn main() {
+    env_logger::init();
     let decoded = decode_intel_hex(BufReader::new(File::open("./main.hex").unwrap())).unwrap();
 
     for (i, &b) in decoded.iter().enumerate() {

@@ -3,7 +3,7 @@ use std::io::Cursor;
 use stk::inst::{BitIndex, LiteralOrientedInstruction, ProgramAddr};
 
 /// tries to decode
-/// ```
+/// ```ignore
 /// psect kmain,class=CODE,delta=2
 ///
 /// setup:
