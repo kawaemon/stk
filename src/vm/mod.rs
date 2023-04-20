@@ -1,8 +1,10 @@
-use crate::inst::Instruction;
+use crate::inst::{ControlInstruction, Instruction};
 
 pub struct P16F88 {
     w: u8,
+    pc: u16,
     register: [u8; 0x0200],
+    flash: [u8; 7168],
 }
 
 impl P16F88 {
@@ -24,16 +26,18 @@ impl P16F88 {
 
         P16F88 {
             w: 0,
+            pc: 0,
             register: v.register,
+            flash: [0; 7168],
         }
     }
 
-    pub fn exec(inst: Instruction) -> Self {
+    pub fn exec(&mut self, inst: Instruction) -> Self {
         match inst {
             Instruction::ByteOriented(_) => todo!(),
             Instruction::BitOriented(_) => todo!(),
             Instruction::LiteralOriented(_) => todo!(),
-            Instruction::Control(_) => todo!(),
+            Instruction::Control(ControlInstruction::Call { addr }) => todo!(),
         }
     }
 }
