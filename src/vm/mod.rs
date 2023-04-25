@@ -1,6 +1,9 @@
 use arrayvec::ArrayVec;
 
-use crate::inst::{ControlInstruction, Instruction, ProgramAddr, RegisterFileAddr};
+use crate::{
+    inst::{ControlInstruction, Instruction},
+    vm::reg::Register,
+};
 
 // datasheet: https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/30487D.pdf
 
@@ -9,6 +12,7 @@ pub struct P16F88<T: Ticker> {
     pc: u16,
     flash: [u8; 7168],
     call_stack: ArrayVec<u16, 8>,
+    register: reg::Registers,
     ticker: T,
 }
 
@@ -24,8 +28,18 @@ impl<T: Ticker> P16F88<T> {
             pc: 0,
             flash: [0; 7168],
             call_stack: ArrayVec::new(),
+            register: reg::Registers::new(),
             ticker,
         }
+    }
+
+    pub fn step(&mut self) {
+        let a = self.flash[self.pc as usize];
+        let b = self.flash[(self.pc + 1) as usize];
+        let bytecode = ((b as u16) << 8) | (a as u16);
+        let inst =
+            Instruction::from_code(bytecode).expect("couldn't decode bytecode into instruction");
+        self.exec(inst);
     }
 
     pub fn exec(&mut self, inst: Instruction) {
@@ -35,6 +49,7 @@ impl<T: Ticker> P16F88<T> {
             Instruction::BitOriented(_) => todo!(),
             Instruction::LiteralOriented(_) => todo!(),
             Instruction::Control(ClearF { f }) => {
+                self.register.at(f).write(0);
                 self.ticker.tick(1);
             }
             Instruction::Control(ClearW) => {
@@ -49,7 +64,7 @@ impl<T: Ticker> P16F88<T> {
                 // pclath: 0b0001_1xxx_0000_0000
                 // pc:     0b0000_0111_1111_1111
                 self.pc = addr.0;
-                // self.pc |= ((self.register[reg::PCLATH::ADDR as usize] & 0b0001_1000) as u16) << 8;
+                self.pc |= ((self.register.special.pclath().read() & 0b0001_1000) as u16) << 8;
                 self.ticker.tick(2);
             }
             Instruction::Control(Return) => {
@@ -65,36 +80,12 @@ impl<T: Ticker> P16F88<T> {
             Instruction::Control(_) => todo!(),
         }
     }
-
-    // fn wr(&mut self, op: RegisterFileAddr) -> &mut u8 {
-    // bank 0
-    // 0x00:  0b0000_0000
-    // 0x7f:  0b0111_1111
-    //
-    // bank 1
-    // 0x80:  0b1000_0000
-    // 0xff:  0b1111_1111
-    //
-    // bank 2
-    // 0x100: 0b1_0000_0000
-    // 0x17f: 0b1_0111_1111
-    //
-    // bank 3
-    // 0x180: 0b1_1000_0000
-    // 0x1ff: 0b1_1111_1111
-    // }
-
-    // fn set_z(&mut self, bit: bool) {
-    //     if bit {
-    //         self.register[reg::STATUS.addr() as usize] |= 0b0000_0100;
-    //     } else {
-    //         self.register[reg::STATUS.addr() as usize] &= !0b0000_0100;
-    //     }
-    // }
 }
 
 pub mod reg {
     #![allow(dead_code)]
+
+    use crate::inst::RegisterFileAddr;
 
     pub trait Register {
         fn read(&self) -> u8;
@@ -102,86 +93,86 @@ pub mod reg {
     }
 
     pub struct Registers {
-        special: SpecialPurposeRegisters,
-        gpr: [GeneralPurposeRegister; 368],
+        pub special: SpecialPurposeRegisters,
+        pub gpr: [GeneralPurposeRegister; 368],
     }
 
     pub struct GeneralPurposeRegister(u8);
 
     special_registers! {
-        // name                    init        unimplemented unknown
-        IADDR      iaddr      stub 0b0000_0000 0b0000_0000 0b0000_0000 // TODO:
-        UNIMPL     unimpl     stub 0b0000_0000 0b0000_0000 0b0000_0000 // TODO:
-        RESERV     reserv     stub 0b0000_0000 0b0000_0000 0b0000_0000 // TODO:
-        TMR0       tmr0       stub 0b0000_0000 0b0000_0000 0b1111_1111
-        PCL        pcl        stub 0b0000_0000 0b0000_0000 0b0000_0000
-        STATUS     status     stub 0b0001_1000 0b0000_0000 0b0000_0111
-        FSR        fsr        stub 0b0000_0000 0b0000_0000 0b1111_1111
-        PORTA      porta      stub 0b0000_0000 0b0000_0000 0b1110_0000
-        PORTB      portb      stub 0b0000_0000 0b0000_0000 0b0011_1111
-        PCLATH     pclath     stub 0b0000_0000 0b1110_0000 0b0000_0000
-        INTCON     intcon     stub 0b0000_0000 0b0000_0000 0b0000_0001
-        PIR1       pir1       stub 0b0000_0000 0b1000_0000 0b0000_0000
-        PIR2       pir2       stub 0b0000_0000 0b0010_1111 0b0000_0000
-        TMR1L      tmr1l      stub 0b0000_0000 0b0000_0000 0b1111_1111
-        TMR1H      tmr1h      stub 0b0000_0000 0b0000_0000 0b1111_1111
-        T1CON      t1con      stub 0b0000_0000 0b1000_0000 0b0000_0000
-        TMR2       tmr2       stub 0b0000_0000 0b0000_0000 0b0000_0000
-        T2CON      t2con      stub 0b0000_0000 0b1000_0000 0b0000_0000
-        SSPBUF     sspbuf     stub 0b0000_0000 0b0000_0000 0b1111_1111
-        SSPCON     sspcon     stub 0b0000_0000 0b0000_0000 0b0000_0000
-        CCPR1L     ccpr1l     stub 0b0000_0000 0b0000_0000 0b1111_1111
-        CCPR1H     ccpr1h     stub 0b0000_0000 0b0000_0000 0b1111_1111
-        CCP1CON    ccp1con    stub 0b0000_0000 0b1100_0000 0b0000_0000
-        RCSTA      rcsta      stub 0b0000_0000 0b0000_0000 0b0000_0001
-        TXREG      txreg      stub 0b0000_0000 0b0000_0000 0b0000_0000
-        RCREG      rcreg      stub 0b0000_0000 0b0000_0000 0b0000_0000
-        ADRESH     adresh     stub 0b0000_0000 0b0000_0000 0b1111_1111
-        ADCON0     adcon0     stub 0b0000_0000 0b0000_0010 0b0000_0000
-        OPTION_REG option_reg stub 0b1111_1111 0b0000_0000 0b0000_0000
-        TRISA      trisa      stub 0b1111_1111 0b0000_0000 0b0000_0000
-        TRISB      trisb      stub 0b1111_1111 0b0000_0000 0b0000_0000
-        PIE1       pie1       stub 0b0000_0000 0b1000_0000 0b0000_0000
-        PIE2       pie2       stub 0b0000_0000 0b0010_1111 0b0000_0000
-        PCON       pcon       stub 0b0000_0000 0b1111_1100 0b0000_0000 // NOTE: 0b0000_0001 depends on condition
-        OSCCON     osccon     stub 0b0000_0000 0b1000_0000 0b0000_0000
-        OSCTUNE    osctune    stub 0b0000_0000 0b1100_0000 0b0000_0000
-        PR2        pr2        stub 0b1111_1111 0b0000_0000 0b0000_0000
-        SSPADD     sspadd     stub 0b0000_0000 0b0000_0000 0b0000_0000
-        SSPSTAT    sspstat    stub 0b0000_0000 0b0000_0000 0b0000_0000
-        TXSTA      txsta      stub 0b0000_0010 0b0000_1000 0b0000_0000
-        SPBRG      spbrg      stub 0b0000_0000 0b0000_0000 0b0000_0000
-        ANSEL      ansel      stub 0b0111_1111 0b1000_0000 0b0000_0000
-        CMCON      cmcon      stub 0b0000_0111 0b0000_0000 0b0000_0000
-        CVRCON     cvrcon     stub 0b0000_0000 0b0001_0000 0b0000_0000
-        WDTCON     wdtcon     stub 0b0000_1000 0b1110_0000 0b0000_0000
-        ADRESL     adresl     stub 0b0000_0000 0b0000_0000 0b1111_1111
-        ADCON1     adcon1     stub 0b0000_0000 0b0000_1111 0b0000_0000
-        EEDATA     eedata     stub 0b0000_0000 0b0000_0000 0b1111_1111
-        EEADR      eeadr      stub 0b0000_0000 0b0000_0000 0b1111_1111
-        EEDATH     eedath     stub 0b0000_0000 0b1100_0000 0b0011_1111
-        EEADRH     eeadrh     stub 0b0000_0000 0b1111_1000 0b0000_0111
-        EECON1     eecon1     stub 0b0000_0000 0b0110_0000 0b1001_1000
-        EECON2     eecon2     stub 0b0000_0000 0b1111_1111 0b0000_0000
+        // name    field      impl   init        unimpl      unstable on reset
+        IADDR      iaddr      unimpl 0b0000_0000 0b0000_0000 0b0000_0000
+        UNIMPL     unimpl     unimpl 0b0000_0000 0b0000_0000 0b0000_0000
+        RESERV     reserv     unimpl 0b0000_0000 0b0000_0000 0b0000_0000
+        TMR0       tmr0       stub   0b0000_0000 0b0000_0000 0b1111_1111
+        PCL        pcl        stub   0b0000_0000 0b0000_0000 0b0000_0000
+        STATUS     status     stub   0b0001_1000 0b0000_0000 0b0000_0111
+        FSR        fsr        stub   0b0000_0000 0b0000_0000 0b1111_1111
+        PORTA      porta      stub   0b0000_0000 0b0000_0000 0b1110_0000
+        PORTB      portb      stub   0b0000_0000 0b0000_0000 0b0011_1111
+        PCLATH     pclath     stub   0b0000_0000 0b1110_0000 0b0000_0000
+        INTCON     intcon     stub   0b0000_0000 0b0000_0000 0b0000_0001
+        PIR1       pir1       stub   0b0000_0000 0b1000_0000 0b0000_0000
+        PIR2       pir2       stub   0b0000_0000 0b0010_1111 0b0000_0000
+        TMR1L      tmr1l      stub   0b0000_0000 0b0000_0000 0b1111_1111
+        TMR1H      tmr1h      stub   0b0000_0000 0b0000_0000 0b1111_1111
+        T1CON      t1con      stub   0b0000_0000 0b1000_0000 0b0000_0000
+        TMR2       tmr2       stub   0b0000_0000 0b0000_0000 0b0000_0000
+        T2CON      t2con      stub   0b0000_0000 0b1000_0000 0b0000_0000
+        SSPBUF     sspbuf     stub   0b0000_0000 0b0000_0000 0b1111_1111
+        SSPCON     sspcon     stub   0b0000_0000 0b0000_0000 0b0000_0000
+        CCPR1L     ccpr1l     stub   0b0000_0000 0b0000_0000 0b1111_1111
+        CCPR1H     ccpr1h     stub   0b0000_0000 0b0000_0000 0b1111_1111
+        CCP1CON    ccp1con    stub   0b0000_0000 0b1100_0000 0b0000_0000
+        RCSTA      rcsta      stub   0b0000_0000 0b0000_0000 0b0000_0001
+        TXREG      txreg      stub   0b0000_0000 0b0000_0000 0b0000_0000
+        RCREG      rcreg      stub   0b0000_0000 0b0000_0000 0b0000_0000
+        ADRESH     adresh     stub   0b0000_0000 0b0000_0000 0b1111_1111
+        ADCON0     adcon0     stub   0b0000_0000 0b0000_0010 0b0000_0000
+        OPTION_REG option_reg stub   0b1111_1111 0b0000_0000 0b0000_0000
+        TRISA      trisa      stub   0b1111_1111 0b0000_0000 0b0000_0000
+        TRISB      trisb      stub   0b1111_1111 0b0000_0000 0b0000_0000
+        PIE1       pie1       stub   0b0000_0000 0b1000_0000 0b0000_0000
+        PIE2       pie2       stub   0b0000_0000 0b0010_1111 0b0000_0000
+        PCON       pcon       stub   0b0000_0000 0b1111_1100 0b0000_0000 // NOTE: 0b0000_0001 depends on condition
+        OSCCON     osccon     stub   0b0000_0000 0b1000_0000 0b0000_0000
+        OSCTUNE    osctune    stub   0b0000_0000 0b1100_0000 0b0000_0000
+        PR2        pr2        stub   0b1111_1111 0b0000_0000 0b0000_0000
+        SSPADD     sspadd     stub   0b0000_0000 0b0000_0000 0b0000_0000
+        SSPSTAT    sspstat    stub   0b0000_0000 0b0000_0000 0b0000_0000
+        TXSTA      txsta      stub   0b0000_0010 0b0000_1000 0b0000_0000
+        SPBRG      spbrg      stub   0b0000_0000 0b0000_0000 0b0000_0000
+        ANSEL      ansel      stub   0b0111_1111 0b1000_0000 0b0000_0000
+        CMCON      cmcon      stub   0b0000_0111 0b0000_0000 0b0000_0000
+        CVRCON     cvrcon     stub   0b0000_0000 0b0001_0000 0b0000_0000
+        WDTCON     wdtcon     stub   0b0000_1000 0b1110_0000 0b0000_0000
+        ADRESL     adresl     stub   0b0000_0000 0b0000_0000 0b1111_1111
+        ADCON1     adcon1     stub   0b0000_0000 0b0000_1111 0b0000_0000
+        EEDATA     eedata     stub   0b0000_0000 0b0000_0000 0b1111_1111
+        EEADR      eeadr      stub   0b0000_0000 0b0000_0000 0b1111_1111
+        EEDATH     eedath     stub   0b0000_0000 0b1100_0000 0b0011_1111
+        EEADRH     eeadrh     stub   0b0000_0000 0b1111_1000 0b0000_0111
+        EECON1     eecon1     stub   0b0000_0000 0b0110_0000 0b1001_1000
+        EECON2     eecon2     stub   0b0000_0000 0b1111_1111 0b0000_0000
     }
 
     register_map! {
-        0x00 iaddr   iaddr      iaddr  iaddr
-        0x01 tmr0    option_reg tmr0   option_reg
-        0x02 pcl     pcl        pcl    pcl
-        0x03 status  status     status status
-        0x04 fsr     fsr        fsr    fsr
-        0x05 porta   trisa      wdtcon unimpl
-        0x06 portb   trisb      portb  trisb
-        0x07 unimpl  unimpl     unimpl unimpl
-        0x08 unimpl  unimpl     unimpl unimpl
-        0x09 unimpl  unimpl     unimpl unimpl
-        0x0A pclath  pclath     pclath pclath
-        0x0B intcon  intcon     intcon intcon
-        0x0C pir1    pie1       eedata eecon1
-        0x0D pir2    pie2       eeadr  eecon2
-        0x0E tmr1l   pcon       eedath reserv
-        0x0F tmr1h   osccon     eeadrh reserv
+        0x00 iaddr   iaddr      iaddr    iaddr
+        0x01 tmr0    option_reg tmr0     option_reg
+        0x02 pcl     pcl        pcl      pcl
+        0x03 status  status     status   status
+        0x04 fsr     fsr        fsr      fsr
+        0x05 porta   trisa      wdtcon   unimpl
+        0x06 portb   trisb      portb    trisb
+        0x07 unimpl  unimpl     unimpl   unimpl
+        0x08 unimpl  unimpl     unimpl   unimpl
+        0x09 unimpl  unimpl     unimpl   unimpl
+        0x0A pclath  pclath     pclath   pclath
+        0x0B intcon  intcon     intcon   intcon
+        0x0C pir1    pie1       eedata   eecon1
+        0x0D pir2    pie2       eeadr    eecon2
+        0x0E tmr1l   pcon       eedath   reserv
+        0x0F tmr1h   osccon     eeadrh   reserv
         0x10 t1con   osctune    gpr[176] gpr[272]
         0x11 tmr2    unimpl     gpr[177] gpr[273]
         0x12 t2con   pr2        gpr[178] gpr[274]
@@ -278,7 +269,7 @@ pub mod reg {
         0x6D gpr[77] gpr[173]   gpr[269] gpr[365]
         0x6E gpr[78] gpr[174]   gpr[270] gpr[366]
         0x6F gpr[79] gpr[175]   gpr[271] gpr[367]
-        0x70 gpr[80] gpr[80]    gpr[80]  gpr[80] // `accesses`
+        0x70 gpr[80] gpr[80]    gpr[80]  gpr[80]  // `accesses`
         0x71 gpr[81] gpr[81]    gpr[81]  gpr[81]
         0x72 gpr[82] gpr[82]    gpr[82]  gpr[82]
         0x73 gpr[83] gpr[83]    gpr[83]  gpr[83]
@@ -296,6 +287,58 @@ pub mod reg {
         0x7F gpr[95] gpr[95]    gpr[95]  gpr[95]
     }
 
+    impl Default for Registers {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Registers {
+        pub fn new() -> Self {
+            // super-dirty hack to initialize 368 gprs
+            macro_rules! init {
+                (@root $($a:ident),+$(,)?) => { [$($a::new(),)+] };
+                (@x16  $($a:ident),+$(,)?) => {
+                    init!(@root $(
+                        $a, $a, $a, $a,
+                        $a, $a, $a, $a,
+                        $a, $a, $a, $a,
+                        $a, $a, $a, $a,
+                    )+)
+                };
+                (@x16x23 $($a:ident),+$(,)?) => {
+                    init!(@x16 $(
+                        $a, $a, $a, $a, $a, $a,
+                        $a, $a, $a, $a, $a, $a,
+                        $a, $a, $a, $a, $a, $a,
+                        $a, $a, $a, $a, $a,
+                    )+)
+                };
+            }
+
+            Self {
+                special: SpecialPurposeRegisters::new(),
+                gpr: init!(@x16x23 GeneralPurposeRegister),
+            }
+        }
+
+        pub fn special(&mut self) -> &mut SpecialPurposeRegisters {
+            &mut self.special
+        }
+    }
+
+    impl Default for GeneralPurposeRegister {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl GeneralPurposeRegister {
+        pub fn new() -> Self {
+            Self(0)
+        }
+    }
+
     impl Register for GeneralPurposeRegister {
         fn read(&self) -> u8 {
             // TODO: check for uninitilized?
@@ -310,15 +353,16 @@ pub mod reg {
     macro_rules! register_map {
         ($($addr:literal $bank0:ident$([$index0:literal])? $bank1:ident$([$index1:literal])? $bank2:ident$([$index2:literal])? $bank3:ident$([$index3:literal])?)+) => {
             impl Registers {
-                fn at(&mut self, bank: u8, addr: u8) -> Option<&mut dyn Register> {
-                    match (addr, bank) {
-                        (_, 4..) => panic!("bank out of bounds"),
-                        (0x80.., _) => panic!("addr out of bounds"),
+                pub fn at(&mut self, addr: RegisterFileAddr) -> &mut dyn Register {
+                    let bank = (self.special.status().read() & 0b0110_0000) >> 5;
+                    match (bank, addr.0) {
+                        (4.., _) => panic!("bank out of bounds"),
+                        (_, 0x80..) => panic!("addr out of bounds"),
                         $(
-                            ($addr, 0) => Some(&mut register_map!(@outexpr self $bank0$([$index0])?)),
-                            ($addr, 1) => Some(&mut register_map!(@outexpr self $bank1$([$index1])?)),
-                            ($addr, 2) => Some(&mut register_map!(@outexpr self $bank2$([$index2])?)),
-                            ($addr, 3) => Some(&mut register_map!(@outexpr self $bank3$([$index3])?)),
+                            (0, $addr) => &mut register_map!(@outexpr self $bank0$([$index0])?),
+                            (1, $addr) => &mut register_map!(@outexpr self $bank1$([$index1])?),
+                            (2, $addr) => &mut register_map!(@outexpr self $bank2$([$index2])?),
+                            (3, $addr) => &mut register_map!(@outexpr self $bank3$([$index3])?),
                         )+
                     }
                 }
@@ -344,6 +388,12 @@ pub mod reg {
 
                 $(special_registers!(@genstub $name $stub_ty);)?
 
+                impl Default for $name {
+                    fn default() -> Self {
+                        Self::new()
+                    }
+                }
+
                 impl $name {
                     const UNIMPLEMENTED: u8 = $unimplemented_mask;
                     pub fn new() -> Self {
@@ -354,6 +404,26 @@ pub mod reg {
 
             pub struct SpecialPurposeRegisters {
                 $($lowername: $name,)+
+            }
+
+            impl Default for SpecialPurposeRegisters {
+                fn default() -> Self {
+                    Self::new()
+                }
+            }
+
+            impl SpecialPurposeRegisters {
+                pub fn new() -> Self {
+                    Self {
+                        $($lowername: $name::new(),)+
+                    }
+                }
+
+                $(
+                    pub fn $lowername(&mut self) -> &mut $name {
+                        &mut self.$lowername
+                    }
+                )+
             }
         };
 
@@ -369,6 +439,19 @@ pub mod reg {
                 fn write(&mut self, v: u8) {
                     log::warn!("{}: write stub!", stringify!($name));
                     self.0 = v;
+                }
+            }
+        };
+
+        (@genstub $name:ident unimpl) => {
+            impl Register for $name {
+                fn read(&self) -> u8 {
+                    log::warn!("{}: tried to read the reserved register!: reading 0", stringify!($name));
+                    0
+                }
+
+                fn write(&mut self, _v: u8) {
+                    panic!("{}: attempted to write on the reserved register", stringify!($name));
                 }
             }
         };
