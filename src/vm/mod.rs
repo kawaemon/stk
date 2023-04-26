@@ -1,11 +1,17 @@
 use arrayvec::ArrayVec;
 
 use crate::{
-    inst::{ControlInstruction, Instruction},
+    inst::{
+        BitOrientedInstruction, BitOrientedOperation, ByteOrientedInstruction,
+        ByteOrientedOperation, ControlInstruction, Destination, Instruction,
+        LiteralOrientedInstruction, LiteralOrientedOperation, RegisterFileAddr,
+    },
     vm::reg::Register,
 };
 
-// datasheet: https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/30487D.pdf
+// datasheets:
+//   - https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/30487D.pdf
+//   - https://ww1.microchip.com/downloads/en/DeviceDoc/31029a.pdf
 
 pub struct P16F88<T: Ticker> {
     w: u8,
@@ -43,21 +49,198 @@ impl<T: Ticker> P16F88<T> {
     }
 
     pub fn exec(&mut self, inst: Instruction) {
+        use BitOrientedInstruction as B;
+        use BitOrientedOperation::*;
+        use ByteOrientedInstruction as Y;
+        use ByteOrientedOperation::*;
         use ControlInstruction::*;
+        use Instruction::*;
+        use LiteralOrientedInstruction as L;
+        use LiteralOrientedOperation::*;
+
+        macro_rules! gen {
+            (@lit $op:expr) => {
+                $op;
+                self.pc += 2;
+                self.ticker.tick(1);
+            };
+
+            (@byte $f:ident, $d:ident, |$r:ident| $op:expr) => {
+                match $d {
+                    Destination::W => {
+                        let $r = self.register.at($f).read();
+                        self.w = $op;
+                    }
+                    Destination::F => {
+                        self.register.at($f).write_with(&|$r| $op);
+                    }
+                }
+                self.pc += 2;
+                self.ticker.tick(1);
+            };
+        }
+
+        // TODO: overflow check
+        // TODO: status flags
+
         match inst {
-            Instruction::ByteOriented(_) => todo!(),
-            Instruction::BitOriented(_) => todo!(),
-            Instruction::LiteralOriented(_) => todo!(),
-            Instruction::Control(ClearF { f }) => {
+            #[rustfmt::skip]
+            ByteOriented(Y { op: AddWf, f, dest }) => {
+                gen!(@byte f, dest, |x| self.w + x);
+            }
+            #[rustfmt::skip]
+            ByteOriented(Y { op: AndWf, f, dest }) => {
+                gen!(@byte f, dest, |x| self.w & x);
+            }
+            #[rustfmt::skip]
+            ByteOriented(Y { op: ComplementF, f, dest }) => {
+                // read: datasheets[1] P20
+                gen!(@byte f, dest, |x| !x);
+            }
+            #[rustfmt::skip]
+            ByteOriented(Y { op: DecrementF, f, dest }) => {
+                gen!(@byte f, dest, |x| x - 1);
+            }
+            #[rustfmt::skip]
+            ByteOriented(Y { op: IncrementF, f, dest }) => {
+                gen!(@byte f, dest, |x| x + 1);
+            }
+            #[rustfmt::skip]
+            ByteOriented(Y { op: DecrementFSkipIfZ, f, dest }) => {
+                let res = self.register.at(f).read() - 1;
+                match dest {
+                    Destination::W => self.w = res,
+                    Destination::F => self.register.at(f).write(res),
+                }
+                let skip = res == 0;
+                self.pc += if skip { 4 } else { 2 };
+                self.ticker.tick(if skip { 2 } else { 1 });
+            }
+            #[rustfmt::skip]
+            ByteOriented(Y { op: IncrementFSkipIfZ, f, dest }) => {
+                let res = self.register.at(f).read() + 1;
+                match dest {
+                    Destination::W => self.w = res,
+                    Destination::F => self.register.at(f).write(res),
+                }
+                let skip = res == 0;
+                self.pc += if skip { 4 } else { 2 };
+                self.ticker.tick(if skip { 2 } else { 1 });
+            }
+            #[rustfmt::skip]
+            ByteOriented(Y { op: OrWf, f, dest }) => {
+                gen!(@byte f, dest, |x| self.w | x);
+            }
+            #[rustfmt::skip]
+            ByteOriented(Y { op: MoveF, f, dest }) => {
+                gen!(@byte f, dest, |x| x);
+            }
+            #[rustfmt::skip]
+            ByteOriented(Y { op: RotateLeftFThroughCarry, f, dest }) => {
+                todo!()
+            }
+            #[rustfmt::skip]
+            ByteOriented(Y { op: RotateRightFThroughCarry, f, dest }) => {
+                todo!()
+            }
+            #[rustfmt::skip]
+            ByteOriented(Y { op: SubtractWfromF, f, dest }) => {
+                gen!(@byte f, dest, |x| x - self.w);
+            }
+            #[rustfmt::skip]
+            ByteOriented(Y { op: SwapF, f, dest }) => {
+                gen!(@byte f, dest, |x| {
+                    let left = (x & 0b1111_0000) >> 4;
+                    let right = x & 0b0000_1111;
+                    (right << 4) | left
+                });
+            }
+            #[rustfmt::skip]
+            ByteOriented(Y { op: XorWwithF, f, dest }) => {
+                gen!(@byte f, dest, |x| self.w ^ x);
+            }
+            #[rustfmt::skip]
+            BitOriented(B { op: BitClearF, b, f }) => {
+                let mask = 0b0000_0001 << b.0;
+                self.register.at(f).write_with(&|x| x & (!mask));
+                self.pc += 2;
+                self.ticker.tick(1);
+            }
+            #[rustfmt::skip]
+            BitOriented(B { op: BitSetF, b, f }) => {
+                let mask = 0b0000_0001 << b.0;
+                self.register.at(f).write_with(&|x| x | mask);
+                self.pc += 2;
+                self.ticker.tick(1);
+            }
+            #[rustfmt::skip]
+            BitOriented(B { op: SkipIfFBitClear, b, f }) => {
+                let mask = 0b0000_0001 << b.0;
+                let skip = (self.register.at(f).read() & mask) == 0;
+                self.pc += if skip { 4 } else { 2 };
+                self.ticker.tick(if skip { 2 } else { 1 });
+            }
+            #[rustfmt::skip]
+            BitOriented(B { op: SkipIfFBitSet, b, f }) => {
+                let mask = 0b0000_0001 << b.0;
+                let skip = (self.register.at(f).read() & mask) != 0;
+                self.pc += if skip { 4 } else { 2 };
+                self.ticker.tick(if skip { 2 } else { 1 });
+            }
+            #[rustfmt::skip]
+            LiteralOriented(L { op: SubtractWFromLiteral, k }) => {
+                gen!(@lit self.w = k - self.w);
+            }
+            #[rustfmt::skip]
+            LiteralOriented(L { op: XorLiteralWithW, k }) => {
+                gen!(@lit self.w ^= k);
+            }
+            #[rustfmt::skip]
+            LiteralOriented(L { op: OrLiteralWithW, k }) => {
+                gen!(@lit self.w |= k);
+            }
+            #[rustfmt::skip]
+            LiteralOriented(L { op: MoveLiteralToW, k }) => {
+                gen!(@lit self.w = k);
+            }
+            #[rustfmt::skip]
+            LiteralOriented(L { op: AddLiteralToW, k }) => {
+                gen!(@lit self.w += k);
+            }
+            #[rustfmt::skip]
+            LiteralOriented(L { op: AndLiteralWithW, k }) => {
+                gen!(@lit self.w &= k);
+            }
+            #[rustfmt::skip]
+            LiteralOriented(L { op: ReturnWithLiteralInW, k }) => {
+                self.w = k;
+                self.exec(Instruction::Control(Return));
+            }
+            Control(i @ (ClearWatchDogTimer | ReturnFromInterrupt | Sleep)) => {
+                panic!("unimplemented instruction: {i:?}");
+            }
+            Control(ClearF { f }) => {
                 self.register.at(f).write(0);
+                self.pc += 2;
                 self.ticker.tick(1);
             }
-            Instruction::Control(ClearW) => {
+            Control(ClearW) => {
                 self.w = 0;
+                self.pc += 2;
                 self.ticker.tick(1);
             }
-            Instruction::Control(Call { addr }) => {
-                // see also: datasheet P25
+            Control(MoveWtoF { f }) => {
+                self.register.at(f).write(self.w);
+                self.pc += 2;
+                self.ticker.tick(1);
+            }
+            Control(Goto { addr }) => {
+                self.pc = addr.0;
+                self.pc |= ((self.register.special.pclath().read() & 0b0001_1000) as u16) << 8;
+                self.ticker.tick(1);
+            }
+            Control(Call { addr }) => {
+                // read: datasheets[0] P25
                 self.call_stack
                     .try_push(self.pc + 2)
                     .expect("callstack overflow");
@@ -67,17 +250,17 @@ impl<T: Ticker> P16F88<T> {
                 self.pc |= ((self.register.special.pclath().read() & 0b0001_1000) as u16) << 8;
                 self.ticker.tick(2);
             }
-            Instruction::Control(Return) => {
+            Control(Return) => {
                 self.pc = self
                     .call_stack
                     .pop()
                     .expect("callstack underflow: callstack have no return address");
                 self.ticker.tick(2);
             }
-            Instruction::Control(Noop) => {
+            Control(Noop) => {
+                self.pc += 2;
                 self.ticker.tick(1);
             }
-            Instruction::Control(_) => todo!(),
         }
     }
 }
@@ -90,6 +273,11 @@ pub mod reg {
     pub trait Register {
         fn read(&self) -> u8;
         fn write(&mut self, v: u8);
+
+        // using dyn to preserve object-safety
+        fn write_with(&mut self, f: &dyn Fn(u8) -> u8) {
+            self.write(f(self.read()))
+        }
     }
 
     pub struct Registers {

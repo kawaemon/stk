@@ -203,7 +203,7 @@ fn decode_instructions() {
         Control(ReturnFromInterrupt),
         Control(Sleep),
         LiteralOriented(LiteralOrientedInstruction {
-            op: SubtractWFromLitral,
+            op: SubtractWFromLiteral,
             k: 45,
         }),
         LiteralOriented(LiteralOrientedInstruction {
