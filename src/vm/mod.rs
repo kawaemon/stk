@@ -310,9 +310,9 @@ impl<T: Ticker> P16F88<T> {
                 self.ticker.tick(&self.register, 1);
             }
             Control(Goto { addr }) => {
-                self.pc = addr.0;
+                self.pc = addr.0 * 2;
                 self.pc |= ((self.register.special.pclath().read() & 0b0001_1000) as u16) << 8;
-                self.ticker.tick(&self.register, 1);
+                self.ticker.tick(&self.register, 2);
             }
             Control(Call { addr }) => {
                 // read: datasheets[0] P25
@@ -321,7 +321,7 @@ impl<T: Ticker> P16F88<T> {
                     .expect("callstack overflow");
                 // pclath: 0b0001_1xxx_0000_0000
                 // pc:     0b0000_0111_1111_1111
-                self.pc = addr.0;
+                self.pc = addr.0 * 2;
                 self.pc |= ((self.register.special.pclath().read() & 0b0001_1000) as u16) << 8;
                 self.ticker.tick(&self.register, 2);
             }
