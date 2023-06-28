@@ -38,9 +38,7 @@ impl<R: Read> IntelHexDecoder<R> {
             .iter()
             .position(|&x| x == buf[0])
             .map(|p| p as u8)
-            .ok_or(Error::InvalidHexChar {
-                found: buf[0] as char,
-            })
+            .ok_or(Error::InvalidHexChar { found: buf[0] as char })
     }
 
     fn decode_hex_u8(&mut self) -> Result<u8> {
@@ -63,9 +61,7 @@ impl<R: Read> IntelHexDecoder<R> {
             self.reader.read_exact(&mut buf).map_err(Error::Io)?;
 
             if buf != [b':'] {
-                return Err(Error::InvalidLineStart {
-                    found: buf[0] as char,
-                });
+                return Err(Error::InvalidLineStart { found: buf[0] as char });
             }
 
             let byte_count = self.decode_hex_u8()?;
@@ -101,9 +97,7 @@ impl<R: Read> IntelHexDecoder<R> {
                 self.reader.read_exact(&mut buf).map_err(Error::Io)?;
             }
             if buf != [b'\n'] {
-                return Err(Error::InvalidNewLine {
-                    found: buf[0] as char,
-                });
+                return Err(Error::InvalidNewLine { found: buf[0] as char });
             }
         }
 

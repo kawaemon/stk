@@ -476,14 +476,10 @@ impl ControlInstruction {
                 Some(ControlInstruction::ClearW)
             }
             i if (i & 0b0011_1000_0000_0000) == 0b0010_1000_0000_0000 => {
-                Some(ControlInstruction::Goto {
-                    addr: ProgramAddr::new(i & 0b0000_0111_1111_1111),
-                })
+                Some(ControlInstruction::Goto { addr: ProgramAddr::new(i & 0b0000_0111_1111_1111) })
             }
             i if (i & 0b0011_1000_0000_0000) == 0b0010_0000_0000_0000 => {
-                Some(ControlInstruction::Call {
-                    addr: ProgramAddr::new(i & 0b0000_0111_1111_1111),
-                })
+                Some(ControlInstruction::Call { addr: ProgramAddr::new(i & 0b0000_0111_1111_1111) })
             }
             i if (i & 0b0011_1111_1000_0000) == 0b0000_0001_1000_0000 => {
                 Some(ControlInstruction::ClearF {

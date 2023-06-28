@@ -4,7 +4,7 @@ use crate::{
     inst::{
         BitOrientedInstruction, BitOrientedOperation, ByteOrientedInstruction,
         ByteOrientedOperation, ControlInstruction, Destination, Instruction,
-        LiteralOrientedInstruction, LiteralOrientedOperation, RegisterFileAddr,
+        LiteralOrientedInstruction, LiteralOrientedOperation,
     },
     vm::reg::Register,
 };
@@ -48,6 +48,15 @@ impl<T: Ticker> P16F88<T> {
         self.exec(inst);
     }
 
+    fn dc(a: u8, b: u8) -> bool {
+        // https://en.wikipedia.org/wiki/Carry-lookahead_adder
+        let at = |x, i| (x & (1u8 << i)) != 0u8;
+        let g = |i| at(a, i) & at(b, i);
+        let p = |i| at(a, i) | at(b, i);
+        g(3) | (g(2) & p(3)) | (g(1) & p(2) & p(3)) | (g(0) & p(1) & p(2) & p(3))
+        // | (false & p(0) & p(1) & p(2) & p(3))
+    }
+
     pub fn exec(&mut self, inst: Instruction) {
         use BitOrientedInstruction as B;
         use BitOrientedOperation::*;
@@ -72,7 +81,9 @@ impl<T: Ticker> P16F88<T> {
                         self.w = $op;
                     }
                     Destination::F => {
-                        self.register.at($f).write_with(&|$r| $op);
+                        let $r = self.register.at($f).read();
+                        let res = $op;
+                        self.register.at($f).write(res);
                     }
                 }
                 self.pc += 2;
@@ -84,134 +95,190 @@ impl<T: Ticker> P16F88<T> {
         // TODO: status flags
 
         match inst {
-            #[rustfmt::skip]
             ByteOriented(Y { op: AddWf, f, dest }) => {
-                gen!(@byte f, dest, |x| self.w + x);
-            }
-            #[rustfmt::skip]
-            ByteOriented(Y { op: AndWf, f, dest }) => {
-                gen!(@byte f, dest, |x| self.w & x);
-            }
-            #[rustfmt::skip]
-            ByteOriented(Y { op: ComplementF, f, dest }) => {
-                // read: datasheets[1] P20
-                gen!(@byte f, dest, |x| !x);
-            }
-            #[rustfmt::skip]
-            ByteOriented(Y { op: DecrementF, f, dest }) => {
-                gen!(@byte f, dest, |x| x - 1);
-            }
-            #[rustfmt::skip]
-            ByteOriented(Y { op: IncrementF, f, dest }) => {
-                gen!(@byte f, dest, |x| x + 1);
-            }
-            #[rustfmt::skip]
-            ByteOriented(Y { op: DecrementFSkipIfZ, f, dest }) => {
-                let res = self.register.at(f).read() - 1;
-                match dest {
-                    Destination::W => self.w = res,
-                    Destination::F => self.register.at(f).write(res),
-                }
-                let skip = res == 0;
-                self.pc += if skip { 4 } else { 2 };
-                self.ticker.tick(if skip { 2 } else { 1 });
-            }
-            #[rustfmt::skip]
-            ByteOriented(Y { op: IncrementFSkipIfZ, f, dest }) => {
-                let res = self.register.at(f).read() + 1;
-                match dest {
-                    Destination::W => self.w = res,
-                    Destination::F => self.register.at(f).write(res),
-                }
-                let skip = res == 0;
-                self.pc += if skip { 4 } else { 2 };
-                self.ticker.tick(if skip { 2 } else { 1 });
-            }
-            #[rustfmt::skip]
-            ByteOriented(Y { op: OrWf, f, dest }) => {
-                gen!(@byte f, dest, |x| self.w | x);
-            }
-            #[rustfmt::skip]
-            ByteOriented(Y { op: MoveF, f, dest }) => {
-                gen!(@byte f, dest, |x| x);
-            }
-            #[rustfmt::skip]
-            ByteOriented(Y { op: RotateLeftFThroughCarry, f, dest }) => {
-                todo!()
-            }
-            #[rustfmt::skip]
-            ByteOriented(Y { op: RotateRightFThroughCarry, f, dest }) => {
-                todo!()
-            }
-            #[rustfmt::skip]
-            ByteOriented(Y { op: SubtractWfromF, f, dest }) => {
-                gen!(@byte f, dest, |x| x - self.w);
-            }
-            #[rustfmt::skip]
-            ByteOriented(Y { op: SwapF, f, dest }) => {
-                gen!(@byte f, dest, |x| {
-                    let left = (x & 0b1111_0000) >> 4;
-                    let right = x & 0b0000_1111;
-                    (right << 4) | left
+                gen!(@byte f, dest, |b| {
+                    let a = self.w;
+                    let (ret, overflow) = a.overflowing_add(b);
+                    let st = self.register.special().status();
+                    st.set(reg::STATUS::Z, ret == 0);
+                    st.set(reg::STATUS::C, overflow);
+                    st.set(reg::STATUS::DC, Self::dc(a, b));
+                    ret
                 });
             }
-            #[rustfmt::skip]
-            ByteOriented(Y { op: XorWwithF, f, dest }) => {
-                gen!(@byte f, dest, |x| self.w ^ x);
+            ByteOriented(Y { op: AndWf, f, dest }) => {
+                gen!(@byte f, dest, |x| {
+                    let ret = self.w & x;
+                    self.register.special().status().set(reg::STATUS::Z, ret == 0);
+                    ret
+                });
             }
-            #[rustfmt::skip]
+            ByteOriented(Y { op: ComplementF, f, dest }) => {
+                // read: datasheets[1] P20
+                gen!(@byte f, dest, |x| {
+                    let ret = !x;
+                    self.register.special().status().set(reg::STATUS::Z, ret == 0);
+                    ret
+                });
+            }
+            ByteOriented(Y { op: DecrementF, f, dest }) => {
+                gen!(@byte f, dest, |x| {
+                    let ret = x.wrapping_add(1);
+                    self.register.special().status().set(reg::STATUS::Z, ret == 0);
+                    ret
+                });
+            }
+            ByteOriented(Y { op: DecrementFSkipIfZ, f, dest }) => {
+                let ret = self.register.at(f).read().wrapping_sub(1);
+                match dest {
+                    Destination::W => self.w = ret,
+                    Destination::F => self.register.at(f).write(ret),
+                }
+                let skip = ret == 0;
+                self.pc += if skip { 4 } else { 2 };
+                self.ticker.tick(if skip { 2 } else { 1 });
+            }
+            ByteOriented(Y { op: IncrementF, f, dest }) => {
+                gen!(@byte f, dest, |x| {
+                    let ret = x.wrapping_add(1);
+                    self.register.special().status().set(reg::STATUS::Z, ret == 0);
+                    ret
+                });
+            }
+            ByteOriented(Y { op: IncrementFSkipIfZ, f, dest }) => {
+                let res = self.register.at(f).read().wrapping_add(1);
+                match dest {
+                    Destination::W => self.w = res,
+                    Destination::F => self.register.at(f).write(res),
+                }
+                let skip = res == 0;
+                self.pc += if skip { 4 } else { 2 };
+                self.ticker.tick(if skip { 2 } else { 1 });
+            }
+            ByteOriented(Y { op: OrWf, f, dest }) => {
+                gen!(@byte f, dest, |x| {
+                    let ret = self.w | x;
+                    self.register.special().status().set(reg::STATUS::Z, ret == 0);
+                    ret
+                });
+            }
+            ByteOriented(Y { op: MoveF, f, dest }) => {
+                gen!(@byte f, dest, |x| {
+                    let ret = x;
+                    self.register.special().status().set(reg::STATUS::Z, ret == 0);
+                    ret
+                });
+            }
+            ByteOriented(Y { op: RotateLeftFThroughCarry, f, dest }) => {
+                gen!(@byte f, dest, |x| {
+                    let status = self.register.special().status();
+
+                    let f_msb = (x & 0b1000_0000) != 0;
+                    let mut ret = x << 1;
+                    if status.contains(reg::STATUS::C) {
+                        ret |= 1;
+                    }
+                    status.set(reg::STATUS::C, f_msb);
+
+                    ret
+                });
+            }
+            ByteOriented(Y { op: RotateRightFThroughCarry, f, dest }) => {
+                gen!(@byte f, dest, |x| {
+                    let status = self.register.special().status();
+
+                    let f_lsb = (x & 0b000_0001) != 0;
+                    let mut ret = x >> 1;
+                    if status.contains(reg::STATUS::C) {
+                        ret |= 0b1000_0000;
+                    }
+                    status.set(reg::STATUS::C, f_lsb);
+
+                    ret
+                });
+            }
+            ByteOriented(Y { op: SubtractWfromF, f, dest }) => {
+                gen!(@byte f, dest, |b| {
+                    let a = self.w;
+                    let (ret, overflow) = a.overflowing_sub(b);
+                    let st = self.register.special().status();
+                    st.set(reg::STATUS::Z, ret == 0);
+                    st.set(reg::STATUS::C, overflow);
+                    st.set(reg::STATUS::DC, Self::dc(a, (!b).wrapping_add(1)));
+                    ret
+                });
+            }
+            ByteOriented(Y { op: SwapF, f, dest }) => {
+                gen!(@byte f, dest, |x| {
+                    let left = x & 0b1111_0000;
+                    let right = x & 0b0000_1111;
+                    (right << 4) | (left >> 4)
+                });
+            }
+            ByteOriented(Y { op: XorWwithF, f, dest }) => {
+                gen!(@byte f, dest, |x| {
+                    let ret = self.w ^ x;
+                    self.register.special().status().set(reg::STATUS::Z, ret == 0);
+                    ret
+                });
+            }
             BitOriented(B { op: BitClearF, b, f }) => {
                 let mask = 0b0000_0001 << b.0;
                 self.register.at(f).write_with(&|x| x & (!mask));
                 self.pc += 2;
                 self.ticker.tick(1);
             }
-            #[rustfmt::skip]
             BitOriented(B { op: BitSetF, b, f }) => {
                 let mask = 0b0000_0001 << b.0;
                 self.register.at(f).write_with(&|x| x | mask);
                 self.pc += 2;
                 self.ticker.tick(1);
             }
-            #[rustfmt::skip]
             BitOriented(B { op: SkipIfFBitClear, b, f }) => {
                 let mask = 0b0000_0001 << b.0;
                 let skip = (self.register.at(f).read() & mask) == 0;
                 self.pc += if skip { 4 } else { 2 };
                 self.ticker.tick(if skip { 2 } else { 1 });
             }
-            #[rustfmt::skip]
             BitOriented(B { op: SkipIfFBitSet, b, f }) => {
                 let mask = 0b0000_0001 << b.0;
                 let skip = (self.register.at(f).read() & mask) != 0;
                 self.pc += if skip { 4 } else { 2 };
                 self.ticker.tick(if skip { 2 } else { 1 });
             }
-            #[rustfmt::skip]
             LiteralOriented(L { op: SubtractWFromLiteral, k }) => {
-                gen!(@lit self.w = k - self.w);
+                gen!(@lit {
+                    let a = k;
+                    let b = (!self.w).wrapping_add(1);
+                    let (res, overflow) = k.overflowing_add(b);
+                    let st = self.register.special().status();
+                    st.set(reg::STATUS::Z, self.w == 0);
+                    st.set(reg::STATUS::C, overflow);
+                    st.set(reg::STATUS::DC, Self::dc(a, b));
+                    self.w = res;
+                });
             }
-            #[rustfmt::skip]
             LiteralOriented(L { op: XorLiteralWithW, k }) => {
-                gen!(@lit self.w ^= k);
+                gen!(@lit {
+                    self.w ^= k;
+                    self.register.special().status().set(reg::STATUS::Z, self.w == 0);
+                });
             }
-            #[rustfmt::skip]
             LiteralOriented(L { op: OrLiteralWithW, k }) => {
-                gen!(@lit self.w |= k);
+                gen!(@lit {
+                    self.w |= k;
+                    self.register.special().status().set(reg::STATUS::Z, self.w == 0);
+                });
             }
-            #[rustfmt::skip]
             LiteralOriented(L { op: MoveLiteralToW, k }) => {
                 gen!(@lit self.w = k);
             }
-            #[rustfmt::skip]
             LiteralOriented(L { op: AddLiteralToW, k }) => {
                 gen!(@lit self.w += k);
             }
-            #[rustfmt::skip]
             LiteralOriented(L { op: AndLiteralWithW, k }) => {
                 gen!(@lit self.w &= k);
             }
-            #[rustfmt::skip]
             LiteralOriented(L { op: ReturnWithLiteralInW, k }) => {
                 self.w = k;
                 self.exec(Instruction::Control(Return));
@@ -221,11 +288,13 @@ impl<T: Ticker> P16F88<T> {
             }
             Control(ClearF { f }) => {
                 self.register.at(f).write(0);
+                self.register.special().status().set(reg::STATUS::Z, true);
                 self.pc += 2;
                 self.ticker.tick(1);
             }
             Control(ClearW) => {
                 self.w = 0;
+                self.register.special().status().set(reg::STATUS::Z, true);
                 self.pc += 2;
                 self.ticker.tick(1);
             }
@@ -288,63 +357,64 @@ pub mod reg {
     pub struct GeneralPurposeRegister(u8);
 
     special_registers! {
-        // name    field      impl   init        unimpl      unstable on reset
-        IADDR      iaddr      unimpl 0b0000_0000 0b0000_0000 0b0000_0000
-        UNIMPL     unimpl     unimpl 0b0000_0000 0b0000_0000 0b0000_0000
-        RESERV     reserv     unimpl 0b0000_0000 0b0000_0000 0b0000_0000
-        TMR0       tmr0       stub   0b0000_0000 0b0000_0000 0b1111_1111
-        PCL        pcl        stub   0b0000_0000 0b0000_0000 0b0000_0000
-        STATUS     status     stub   0b0001_1000 0b0000_0000 0b0000_0111
-        FSR        fsr        stub   0b0000_0000 0b0000_0000 0b1111_1111
-        PORTA      porta      stub   0b0000_0000 0b0000_0000 0b1110_0000
-        PORTB      portb      stub   0b0000_0000 0b0000_0000 0b0011_1111
-        PCLATH     pclath     stub   0b0000_0000 0b1110_0000 0b0000_0000
-        INTCON     intcon     stub   0b0000_0000 0b0000_0000 0b0000_0001
-        PIR1       pir1       stub   0b0000_0000 0b1000_0000 0b0000_0000
-        PIR2       pir2       stub   0b0000_0000 0b0010_1111 0b0000_0000
-        TMR1L      tmr1l      stub   0b0000_0000 0b0000_0000 0b1111_1111
-        TMR1H      tmr1h      stub   0b0000_0000 0b0000_0000 0b1111_1111
-        T1CON      t1con      stub   0b0000_0000 0b1000_0000 0b0000_0000
-        TMR2       tmr2       stub   0b0000_0000 0b0000_0000 0b0000_0000
-        T2CON      t2con      stub   0b0000_0000 0b1000_0000 0b0000_0000
-        SSPBUF     sspbuf     stub   0b0000_0000 0b0000_0000 0b1111_1111
-        SSPCON     sspcon     stub   0b0000_0000 0b0000_0000 0b0000_0000
-        CCPR1L     ccpr1l     stub   0b0000_0000 0b0000_0000 0b1111_1111
-        CCPR1H     ccpr1h     stub   0b0000_0000 0b0000_0000 0b1111_1111
-        CCP1CON    ccp1con    stub   0b0000_0000 0b1100_0000 0b0000_0000
-        RCSTA      rcsta      stub   0b0000_0000 0b0000_0000 0b0000_0001
-        TXREG      txreg      stub   0b0000_0000 0b0000_0000 0b0000_0000
-        RCREG      rcreg      stub   0b0000_0000 0b0000_0000 0b0000_0000
-        ADRESH     adresh     stub   0b0000_0000 0b0000_0000 0b1111_1111
-        ADCON0     adcon0     stub   0b0000_0000 0b0000_0010 0b0000_0000
-        OPTION_REG option_reg stub   0b1111_1111 0b0000_0000 0b0000_0000
-        TRISA      trisa      stub   0b1111_1111 0b0000_0000 0b0000_0000
-        TRISB      trisb      stub   0b1111_1111 0b0000_0000 0b0000_0000
-        PIE1       pie1       stub   0b0000_0000 0b1000_0000 0b0000_0000
-        PIE2       pie2       stub   0b0000_0000 0b0010_1111 0b0000_0000
-        PCON       pcon       stub   0b0000_0000 0b1111_1100 0b0000_0000 // NOTE: 0b0000_0001 depends on condition
-        OSCCON     osccon     stub   0b0000_0000 0b1000_0000 0b0000_0000
-        OSCTUNE    osctune    stub   0b0000_0000 0b1100_0000 0b0000_0000
-        PR2        pr2        stub   0b1111_1111 0b0000_0000 0b0000_0000
-        SSPADD     sspadd     stub   0b0000_0000 0b0000_0000 0b0000_0000
-        SSPSTAT    sspstat    stub   0b0000_0000 0b0000_0000 0b0000_0000
-        TXSTA      txsta      stub   0b0000_0010 0b0000_1000 0b0000_0000
-        SPBRG      spbrg      stub   0b0000_0000 0b0000_0000 0b0000_0000
-        ANSEL      ansel      stub   0b0111_1111 0b1000_0000 0b0000_0000
-        CMCON      cmcon      stub   0b0000_0111 0b0000_0000 0b0000_0000
-        CVRCON     cvrcon     stub   0b0000_0000 0b0001_0000 0b0000_0000
-        WDTCON     wdtcon     stub   0b0000_1000 0b1110_0000 0b0000_0000
-        ADRESL     adresl     stub   0b0000_0000 0b0000_0000 0b1111_1111
-        ADCON1     adcon1     stub   0b0000_0000 0b0000_1111 0b0000_0000
-        EEDATA     eedata     stub   0b0000_0000 0b0000_0000 0b1111_1111
-        EEADR      eeadr      stub   0b0000_0000 0b0000_0000 0b1111_1111
-        EEDATH     eedath     stub   0b0000_0000 0b1100_0000 0b0011_1111
-        EEADRH     eeadrh     stub   0b0000_0000 0b1111_1000 0b0000_0111
-        EECON1     eecon1     stub   0b0000_0000 0b0110_0000 0b1001_1000
-        EECON2     eecon2     stub   0b0000_0000 0b1111_1111 0b0000_0000
+        // name    field   gen_struct   impl   init        unimpl      unstable on reset
+        IADDR      iaddr       y        unimpl 0b0000_0000 0b0000_0000 0b0000_0000
+        UNIMPL     unimpl      y        unimpl 0b0000_0000 0b0000_0000 0b0000_0000
+        RESERV     reserv      y        unimpl 0b0000_0000 0b0000_0000 0b0000_0000
+        TMR0       tmr0        y        stub   0b0000_0000 0b0000_0000 0b1111_1111
+        PCL        pcl         y        stub   0b0000_0000 0b0000_0000 0b0000_0000
+        STATUS     status      n        none   0b0001_1000 0b0000_0000 0b0000_0111
+        FSR        fsr         y        stub   0b0000_0000 0b0000_0000 0b1111_1111
+        PORTA      porta       y        stub   0b0000_0000 0b0000_0000 0b1110_0000
+        PORTB      portb       y        stub   0b0000_0000 0b0000_0000 0b0011_1111
+        PCLATH     pclath      y        stub   0b0000_0000 0b1110_0000 0b0000_0000
+        INTCON     intcon      y        stub   0b0000_0000 0b0000_0000 0b0000_0001
+        PIR1       pir1        y        stub   0b0000_0000 0b1000_0000 0b0000_0000
+        PIR2       pir2        y        stub   0b0000_0000 0b0010_1111 0b0000_0000
+        TMR1L      tmr1l       y        stub   0b0000_0000 0b0000_0000 0b1111_1111
+        TMR1H      tmr1h       y        stub   0b0000_0000 0b0000_0000 0b1111_1111
+        T1CON      t1con       y        stub   0b0000_0000 0b1000_0000 0b0000_0000
+        TMR2       tmr2        y        stub   0b0000_0000 0b0000_0000 0b0000_0000
+        T2CON      t2con       y        stub   0b0000_0000 0b1000_0000 0b0000_0000
+        SSPBUF     sspbuf      y        stub   0b0000_0000 0b0000_0000 0b1111_1111
+        SSPCON     sspcon      y        stub   0b0000_0000 0b0000_0000 0b0000_0000
+        CCPR1L     ccpr1l      y        stub   0b0000_0000 0b0000_0000 0b1111_1111
+        CCPR1H     ccpr1h      y        stub   0b0000_0000 0b0000_0000 0b1111_1111
+        CCP1CON    ccp1con     y        stub   0b0000_0000 0b1100_0000 0b0000_0000
+        RCSTA      rcsta       y        stub   0b0000_0000 0b0000_0000 0b0000_0001
+        TXREG      txreg       y        stub   0b0000_0000 0b0000_0000 0b0000_0000
+        RCREG      rcreg       y        stub   0b0000_0000 0b0000_0000 0b0000_0000
+        ADRESH     adresh      y        stub   0b0000_0000 0b0000_0000 0b1111_1111
+        ADCON0     adcon0      y        stub   0b0000_0000 0b0000_0010 0b0000_0000
+        OPTION_REG option_reg  y        stub   0b1111_1111 0b0000_0000 0b0000_0000
+        TRISA      trisa       y        stub   0b1111_1111 0b0000_0000 0b0000_0000
+        TRISB      trisb       y        stub   0b1111_1111 0b0000_0000 0b0000_0000
+        PIE1       pie1        y        stub   0b0000_0000 0b1000_0000 0b0000_0000
+        PIE2       pie2        y        stub   0b0000_0000 0b0010_1111 0b0000_0000
+        PCON       pcon        y        stub   0b0000_0000 0b1111_1100 0b0000_0000 // NOTE: 0b0000_0001 depends on condition
+        OSCCON     osccon      y        stub   0b0000_0000 0b1000_0000 0b0000_0000
+        OSCTUNE    osctune     y        stub   0b0000_0000 0b1100_0000 0b0000_0000
+        PR2        pr2         y        stub   0b1111_1111 0b0000_0000 0b0000_0000
+        SSPADD     sspadd      y        stub   0b0000_0000 0b0000_0000 0b0000_0000
+        SSPSTAT    sspstat     y        stub   0b0000_0000 0b0000_0000 0b0000_0000
+        TXSTA      txsta       y        stub   0b0000_0010 0b0000_1000 0b0000_0000
+        SPBRG      spbrg       y        stub   0b0000_0000 0b0000_0000 0b0000_0000
+        ANSEL      ansel       y        stub   0b0111_1111 0b1000_0000 0b0000_0000
+        CMCON      cmcon       y        stub   0b0000_0111 0b0000_0000 0b0000_0000
+        CVRCON     cvrcon      y        stub   0b0000_0000 0b0001_0000 0b0000_0000
+        WDTCON     wdtcon      y        stub   0b0000_1000 0b1110_0000 0b0000_0000
+        ADRESL     adresl      y        stub   0b0000_0000 0b0000_0000 0b1111_1111
+        ADCON1     adcon1      y        stub   0b0000_0000 0b0000_1111 0b0000_0000
+        EEDATA     eedata      y        stub   0b0000_0000 0b0000_0000 0b1111_1111
+        EEADR      eeadr       y        stub   0b0000_0000 0b0000_0000 0b1111_1111
+        EEDATH     eedath      y        stub   0b0000_0000 0b1100_0000 0b0011_1111
+        EEADRH     eeadrh      y        stub   0b0000_0000 0b1111_1000 0b0000_0111
+        EECON1     eecon1      y        stub   0b0000_0000 0b0110_0000 0b1001_1000
+        EECON2     eecon2      y        stub   0b0000_0000 0b1111_1111 0b0000_0000
     }
 
     register_map! {
+        // bank 0      1          2        3
         0x00 iaddr   iaddr      iaddr    iaddr
         0x01 tmr0    option_reg tmr0     option_reg
         0x02 pcl     pcl        pcl      pcl
@@ -483,30 +553,9 @@ pub mod reg {
 
     impl Registers {
         pub fn new() -> Self {
-            // super-dirty hack to initialize 368 gprs
-            macro_rules! init {
-                (@root $($a:ident),+$(,)?) => { [$($a::new(),)+] };
-                (@x16  $($a:ident),+$(,)?) => {
-                    init!(@root $(
-                        $a, $a, $a, $a,
-                        $a, $a, $a, $a,
-                        $a, $a, $a, $a,
-                        $a, $a, $a, $a,
-                    )+)
-                };
-                (@x16x23 $($a:ident),+$(,)?) => {
-                    init!(@x16 $(
-                        $a, $a, $a, $a, $a, $a,
-                        $a, $a, $a, $a, $a, $a,
-                        $a, $a, $a, $a, $a, $a,
-                        $a, $a, $a, $a, $a,
-                    )+)
-                };
-            }
-
             Self {
                 special: SpecialPurposeRegisters::new(),
-                gpr: init!(@x16x23 GeneralPurposeRegister),
+                gpr: std::array::from_fn(|_| GeneralPurposeRegister::new()),
             }
         }
 
@@ -568,13 +617,11 @@ pub mod reg {
 
     macro_rules! special_registers {
         (
-            $($name:ident $lowername:ident $($stub_ty:ident)? $initial_value:literal $unimplemented_mask:literal $unknown_mask:literal)+
+            $($name:ident $lowername:ident $gen_struct:ident $stub_ty:ident $initial_value:literal $unimplemented_mask:literal $unknown_mask:literal)+
         ) => {
             $(
-                #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
-                pub struct $name(u8);
-
-                $(special_registers!(@genstub $name $stub_ty);)?
+                special_registers!(@struct $name $gen_struct $unimplemented_mask $initial_value);
+                special_registers!(@genstub $name $stub_ty);
 
                 impl Default for $name {
                     fn default() -> Self {
@@ -582,12 +629,6 @@ pub mod reg {
                     }
                 }
 
-                impl $name {
-                    const UNIMPLEMENTED: u8 = $unimplemented_mask;
-                    pub fn new() -> Self {
-                        Self($initial_value)
-                    }
-                }
             )+
 
             pub struct SpecialPurposeRegisters {
@@ -615,6 +656,25 @@ pub mod reg {
             }
         };
 
+        (@struct $name:ident y $unimplemented_mask:literal $initial_value:literal) => {
+            #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
+            pub struct $name(u8);
+
+            impl $name {
+                const UNIMPLEMENTED: u8 = $unimplemented_mask;
+                pub fn new() -> Self {
+                    Self($initial_value)
+                }
+            }
+        };
+
+        (@struct $name:ident n $unimplemented_mask:literal $initial_value:literal) => {
+            impl $name {
+                const UNIMPLEMENTED: u8 = $unimplemented_mask;
+                const INITIAL_VALUE: u8 = $initial_value;
+            }
+        };
+
         (@genstub stub) => { };
 
         (@genstub $name:ident stub) => {
@@ -631,6 +691,8 @@ pub mod reg {
             }
         };
 
+        (@genstub $name:ident none) => { };
+
         (@genstub $name:ident unimpl) => {
             impl Register for $name {
                 fn read(&self) -> u8 {
@@ -643,6 +705,35 @@ pub mod reg {
                 }
             }
         };
+    }
+
+    bitflags::bitflags! {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub struct STATUS: u8 {
+            const IRP = 1 << 7;
+            const RP1 = 1 << 6;
+            const RP0 = 1 << 5;
+            const TO  = 1 << 4;
+            const PD  = 1 << 3;
+            const Z   = 1 << 2;
+            const DC  = 1 << 1;
+            const C   = 1 << 0;
+        }
+    }
+
+    impl STATUS {
+        fn new() -> Self {
+            Self::from_bits(Self::INITIAL_VALUE).unwrap()
+        }
+    }
+    impl Register for STATUS {
+        fn read(&self) -> u8 {
+            self.bits()
+        }
+
+        fn write(&mut self, v: u8) {
+            *self = Self::from_bits(v).unwrap();
+        }
     }
 
     use register_map;
