@@ -3,7 +3,7 @@ use std::io::Cursor;
 use stk::inst::{BitIndex, LiteralOrientedInstruction, ProgramAddr};
 
 /// tries to decode
-/// ```
+/// ```ignore
 /// psect kmain,class=CODE,delta=2
 ///
 /// setup:
@@ -79,19 +79,9 @@ fn decode_instructions() {
     };
 
     let model = [
-        ByteOriented(ByteOrientedInstruction {
-            op: AddWf,
-            f: RegisterFileAddr(0x55),
-            dest: F,
-        }),
-        ByteOriented(ByteOrientedInstruction {
-            op: AndWf,
-            f: RegisterFileAddr(0x55),
-            dest: W,
-        }),
-        Control(ClearF {
-            f: RegisterFileAddr(0x55),
-        }),
+        ByteOriented(ByteOrientedInstruction { op: AddWf, f: RegisterFileAddr(0x55), dest: F }),
+        ByteOriented(ByteOrientedInstruction { op: AndWf, f: RegisterFileAddr(0x55), dest: W }),
+        Control(ClearF { f: RegisterFileAddr(0x55) }),
         Control(ClearW),
         ByteOriented(ByteOrientedInstruction {
             op: ComplementF,
@@ -118,19 +108,9 @@ fn decode_instructions() {
             f: RegisterFileAddr(0x55),
             dest: F,
         }),
-        ByteOriented(ByteOrientedInstruction {
-            op: OrWf,
-            f: RegisterFileAddr(0x55),
-            dest: W,
-        }),
-        ByteOriented(ByteOrientedInstruction {
-            op: MoveF,
-            f: RegisterFileAddr(0x23),
-            dest: F,
-        }),
-        Control(MoveWtoF {
-            f: RegisterFileAddr(0x23),
-        }),
+        ByteOriented(ByteOrientedInstruction { op: OrWf, f: RegisterFileAddr(0x55), dest: W }),
+        ByteOriented(ByteOrientedInstruction { op: MoveF, f: RegisterFileAddr(0x23), dest: F }),
+        Control(MoveWtoF { f: RegisterFileAddr(0x23) }),
         Control(Noop),
         ByteOriented(ByteOrientedInstruction {
             op: RotateLeftFThroughCarry,
@@ -147,16 +127,8 @@ fn decode_instructions() {
             f: RegisterFileAddr(0x23),
             dest: W,
         }),
-        ByteOriented(ByteOrientedInstruction {
-            op: SwapF,
-            f: RegisterFileAddr(0x23),
-            dest: F,
-        }),
-        ByteOriented(ByteOrientedInstruction {
-            op: XorWwithF,
-            f: RegisterFileAddr(0x23),
-            dest: W,
-        }),
+        ByteOriented(ByteOrientedInstruction { op: SwapF, f: RegisterFileAddr(0x23), dest: F }),
+        ByteOriented(ByteOrientedInstruction { op: XorWwithF, f: RegisterFileAddr(0x23), dest: W }),
         BitOriented(BitOrientedInstruction {
             op: BitClearF,
             b: BitIndex::new(7),
@@ -177,46 +149,21 @@ fn decode_instructions() {
             b: BitIndex::new(1),
             f: RegisterFileAddr(0x55),
         }),
-        LiteralOriented(LiteralOrientedInstruction {
-            op: AddLiteralToW,
-            k: 127,
-        }),
-        LiteralOriented(LiteralOrientedInstruction {
-            op: AndLiteralWithW,
-            k: 98,
-        }),
-        Control(Call {
-            addr: ProgramAddr(0x0021),
-        }),
+        LiteralOriented(LiteralOrientedInstruction { op: AddLiteralToW, k: 127 }),
+        LiteralOriented(LiteralOrientedInstruction { op: AndLiteralWithW, k: 98 }),
+        Control(Call { addr: ProgramAddr(0x0021) }),
         Control(ClearWatchDogTimer),
-        Control(Goto {
-            addr: ProgramAddr(0x001b),
-        }),
-        LiteralOriented(LiteralOrientedInstruction {
-            op: OrLiteralWithW,
-            k: 34,
-        }),
-        LiteralOriented(LiteralOrientedInstruction {
-            op: MoveLiteralToW,
-            k: 19,
-        }),
+        Control(Goto { addr: ProgramAddr(0x001b) }),
+        LiteralOriented(LiteralOrientedInstruction { op: OrLiteralWithW, k: 34 }),
+        LiteralOriented(LiteralOrientedInstruction { op: MoveLiteralToW, k: 19 }),
         Control(ReturnFromInterrupt),
         Control(Sleep),
-        LiteralOriented(LiteralOrientedInstruction {
-            op: SubtractWFromLitral,
-            k: 45,
-        }),
-        LiteralOriented(LiteralOrientedInstruction {
-            op: XorLiteralWithW,
-            k: 12,
-        }),
+        LiteralOriented(LiteralOrientedInstruction { op: SubtractWFromLiteral, k: 45 }),
+        LiteralOriented(LiteralOrientedInstruction { op: XorLiteralWithW, k: 12 }),
         Control(Noop),
         Control(Return),
         Control(Noop),
-        LiteralOriented(LiteralOrientedInstruction {
-            op: ReturnWithLiteralInW,
-            k: 28,
-        }),
+        LiteralOriented(LiteralOrientedInstruction { op: ReturnWithLiteralInW, k: 28 }),
     ];
 
     assert_eq!(model.as_slice(), inst);

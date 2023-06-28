@@ -1,4 +1,4 @@
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub struct RegisterFileAddr(pub u8);
 impl std::fmt::Debug for RegisterFileAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -11,7 +11,7 @@ impl RegisterFileAddr {
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub struct ProgramAddr(pub u16);
 impl std::fmt::Debug for ProgramAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -24,8 +24,8 @@ impl ProgramAddr {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct BitIndex(u8);
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub struct BitIndex(pub u8);
 impl BitIndex {
     pub fn new(i: u8) -> Self {
         assert!(i < 8);
@@ -33,7 +33,7 @@ impl BitIndex {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Destination {
     /// Destination is W register
     W,
@@ -162,7 +162,7 @@ pub enum ByteOrientedOperation {
     IncrementFSkipIfZ,
 
     /// ```ignore
-    /// W | *f -> W
+    /// W | *f -> destination
     /// ```
     /// - affects: Z
     #[doc(alias = "iorwf")]
@@ -319,7 +319,7 @@ impl LiteralOrientedInstruction {
             0b0011_1100
             0b0011_0100 => ReturnWithLiteralInW,
             0b0011_1110
-            0b0011_1100 => SubtractWFromLitral,
+            0b0011_1100 => SubtractWFromLiteral,
             0b0011_1111
             0b0011_1010 => XorLiteralWithW,
         }
@@ -335,7 +335,7 @@ pub enum LiteralOrientedOperation {
     /// ```
     /// - affects: C, DC, Z
     #[doc(alias = "sublw")]
-    SubtractWFromLitral,
+    SubtractWFromLiteral,
 
     /// ```ignore
     /// W ^ k -> W
@@ -476,14 +476,10 @@ impl ControlInstruction {
                 Some(ControlInstruction::ClearW)
             }
             i if (i & 0b0011_1000_0000_0000) == 0b0010_1000_0000_0000 => {
-                Some(ControlInstruction::Goto {
-                    addr: ProgramAddr::new(i & 0b0000_0111_1111_1111),
-                })
+                Some(ControlInstruction::Goto { addr: ProgramAddr::new(i & 0b0000_0111_1111_1111) })
             }
             i if (i & 0b0011_1000_0000_0000) == 0b0010_0000_0000_0000 => {
-                Some(ControlInstruction::Call {
-                    addr: ProgramAddr::new(i & 0b0000_0111_1111_1111),
-                })
+                Some(ControlInstruction::Call { addr: ProgramAddr::new(i & 0b0000_0111_1111_1111) })
             }
             i if (i & 0b0011_1111_1000_0000) == 0b0000_0001_1000_0000 => {
                 Some(ControlInstruction::ClearF {
