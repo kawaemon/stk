@@ -23,16 +23,16 @@ pub struct P16F88<T: Ticker> {
 }
 
 pub trait Ticker {
-    fn tick(&mut self, clocks: u8);
+    fn tick(&mut self, reg: &reg::Registers, cycles: u8);
 }
 
 impl<T: Ticker> P16F88<T> {
     #[allow(clippy::new_without_default)]
-    pub fn new(ticker: T) -> Self {
+    pub fn new(flash: [u8; 7168], ticker: T) -> Self {
         P16F88 {
             w: 0,
             pc: 0,
-            flash: [0; 7168],
+            flash,
             call_stack: ArrayVec::new(),
             register: reg::Registers::new(),
             ticker,
@@ -71,7 +71,7 @@ impl<T: Ticker> P16F88<T> {
             (@lit $op:expr) => {
                 $op;
                 self.pc += 2;
-                self.ticker.tick(1);
+                self.ticker.tick(&self.register, 1);
             };
 
             (@byte $f:ident, $d:ident, |$r:ident| $op:expr) => {
@@ -87,7 +87,7 @@ impl<T: Ticker> P16F88<T> {
                     }
                 }
                 self.pc += 2;
-                self.ticker.tick(1);
+                self.ticker.tick(&self.register, 1);
             };
         }
 
@@ -99,7 +99,7 @@ impl<T: Ticker> P16F88<T> {
                 gen!(@byte f, dest, |b| {
                     let a = self.w;
                     let (ret, overflow) = a.overflowing_add(b);
-                    let st = self.register.special().status();
+                    let st = self.register.special().status_mut();
                     st.set(reg::STATUS::Z, ret == 0);
                     st.set(reg::STATUS::C, overflow);
                     st.set(reg::STATUS::DC, Self::dc(a, b));
@@ -109,7 +109,7 @@ impl<T: Ticker> P16F88<T> {
             ByteOriented(Y { op: AndWf, f, dest }) => {
                 gen!(@byte f, dest, |x| {
                     let ret = self.w & x;
-                    self.register.special().status().set(reg::STATUS::Z, ret == 0);
+                    self.register.special().status_mut().set(reg::STATUS::Z, ret == 0);
                     ret
                 });
             }
@@ -117,14 +117,14 @@ impl<T: Ticker> P16F88<T> {
                 // read: datasheets[1] P20
                 gen!(@byte f, dest, |x| {
                     let ret = !x;
-                    self.register.special().status().set(reg::STATUS::Z, ret == 0);
+                    self.register.special().status_mut().set(reg::STATUS::Z, ret == 0);
                     ret
                 });
             }
             ByteOriented(Y { op: DecrementF, f, dest }) => {
                 gen!(@byte f, dest, |x| {
                     let ret = x.wrapping_add(1);
-                    self.register.special().status().set(reg::STATUS::Z, ret == 0);
+                    self.register.special().status_mut().set(reg::STATUS::Z, ret == 0);
                     ret
                 });
             }
@@ -136,12 +136,12 @@ impl<T: Ticker> P16F88<T> {
                 }
                 let skip = ret == 0;
                 self.pc += if skip { 4 } else { 2 };
-                self.ticker.tick(if skip { 2 } else { 1 });
+                self.ticker.tick(&self.register, if skip { 2 } else { 1 });
             }
             ByteOriented(Y { op: IncrementF, f, dest }) => {
                 gen!(@byte f, dest, |x| {
                     let ret = x.wrapping_add(1);
-                    self.register.special().status().set(reg::STATUS::Z, ret == 0);
+                    self.register.special().status_mut().set(reg::STATUS::Z, ret == 0);
                     ret
                 });
             }
@@ -153,25 +153,25 @@ impl<T: Ticker> P16F88<T> {
                 }
                 let skip = res == 0;
                 self.pc += if skip { 4 } else { 2 };
-                self.ticker.tick(if skip { 2 } else { 1 });
+                self.ticker.tick(&self.register, if skip { 2 } else { 1 });
             }
             ByteOriented(Y { op: OrWf, f, dest }) => {
                 gen!(@byte f, dest, |x| {
                     let ret = self.w | x;
-                    self.register.special().status().set(reg::STATUS::Z, ret == 0);
+                    self.register.special().status_mut().set(reg::STATUS::Z, ret == 0);
                     ret
                 });
             }
             ByteOriented(Y { op: MoveF, f, dest }) => {
                 gen!(@byte f, dest, |x| {
                     let ret = x;
-                    self.register.special().status().set(reg::STATUS::Z, ret == 0);
+                    self.register.special().status_mut().set(reg::STATUS::Z, ret == 0);
                     ret
                 });
             }
             ByteOriented(Y { op: RotateLeftFThroughCarry, f, dest }) => {
                 gen!(@byte f, dest, |x| {
-                    let status = self.register.special().status();
+                    let status = self.register.special().status_mut();
 
                     let f_msb = (x & 0b1000_0000) != 0;
                     let mut ret = x << 1;
@@ -185,7 +185,7 @@ impl<T: Ticker> P16F88<T> {
             }
             ByteOriented(Y { op: RotateRightFThroughCarry, f, dest }) => {
                 gen!(@byte f, dest, |x| {
-                    let status = self.register.special().status();
+                    let status = self.register.special().status_mut();
 
                     let f_lsb = (x & 0b000_0001) != 0;
                     let mut ret = x >> 1;
@@ -201,7 +201,7 @@ impl<T: Ticker> P16F88<T> {
                 gen!(@byte f, dest, |b| {
                     let a = self.w;
                     let (ret, overflow) = a.overflowing_sub(b);
-                    let st = self.register.special().status();
+                    let st = self.register.special().status_mut();
                     st.set(reg::STATUS::Z, ret == 0);
                     st.set(reg::STATUS::C, overflow);
                     st.set(reg::STATUS::DC, Self::dc(a, (!b).wrapping_add(1)));
@@ -218,7 +218,7 @@ impl<T: Ticker> P16F88<T> {
             ByteOriented(Y { op: XorWwithF, f, dest }) => {
                 gen!(@byte f, dest, |x| {
                     let ret = self.w ^ x;
-                    self.register.special().status().set(reg::STATUS::Z, ret == 0);
+                    self.register.special().status_mut().set(reg::STATUS::Z, ret == 0);
                     ret
                 });
             }
@@ -226,32 +226,32 @@ impl<T: Ticker> P16F88<T> {
                 let mask = 0b0000_0001 << b.0;
                 self.register.at(f).write_with(&|x| x & (!mask));
                 self.pc += 2;
-                self.ticker.tick(1);
+                self.ticker.tick(&self.register, 1);
             }
             BitOriented(B { op: BitSetF, b, f }) => {
                 let mask = 0b0000_0001 << b.0;
                 self.register.at(f).write_with(&|x| x | mask);
                 self.pc += 2;
-                self.ticker.tick(1);
+                self.ticker.tick(&self.register, 1);
             }
             BitOriented(B { op: SkipIfFBitClear, b, f }) => {
                 let mask = 0b0000_0001 << b.0;
                 let skip = (self.register.at(f).read() & mask) == 0;
                 self.pc += if skip { 4 } else { 2 };
-                self.ticker.tick(if skip { 2 } else { 1 });
+                self.ticker.tick(&self.register, if skip { 2 } else { 1 });
             }
             BitOriented(B { op: SkipIfFBitSet, b, f }) => {
                 let mask = 0b0000_0001 << b.0;
                 let skip = (self.register.at(f).read() & mask) != 0;
                 self.pc += if skip { 4 } else { 2 };
-                self.ticker.tick(if skip { 2 } else { 1 });
+                self.ticker.tick(&self.register, if skip { 2 } else { 1 });
             }
             LiteralOriented(L { op: SubtractWFromLiteral, k }) => {
                 gen!(@lit {
                     let a = k;
                     let b = (!self.w).wrapping_add(1);
                     let (res, overflow) = k.overflowing_add(b);
-                    let st = self.register.special().status();
+                    let st = self.register.special().status_mut();
                     st.set(reg::STATUS::Z, self.w == 0);
                     st.set(reg::STATUS::C, overflow);
                     st.set(reg::STATUS::DC, Self::dc(a, b));
@@ -261,13 +261,13 @@ impl<T: Ticker> P16F88<T> {
             LiteralOriented(L { op: XorLiteralWithW, k }) => {
                 gen!(@lit {
                     self.w ^= k;
-                    self.register.special().status().set(reg::STATUS::Z, self.w == 0);
+                    self.register.special().status_mut().set(reg::STATUS::Z, self.w == 0);
                 });
             }
             LiteralOriented(L { op: OrLiteralWithW, k }) => {
                 gen!(@lit {
                     self.w |= k;
-                    self.register.special().status().set(reg::STATUS::Z, self.w == 0);
+                    self.register.special().status_mut().set(reg::STATUS::Z, self.w == 0);
                 });
             }
             LiteralOriented(L { op: MoveLiteralToW, k }) => {
@@ -288,25 +288,31 @@ impl<T: Ticker> P16F88<T> {
             }
             Control(ClearF { f }) => {
                 self.register.at(f).write(0);
-                self.register.special().status().set(reg::STATUS::Z, true);
+                self.register
+                    .special()
+                    .status_mut()
+                    .set(reg::STATUS::Z, true);
                 self.pc += 2;
-                self.ticker.tick(1);
+                self.ticker.tick(&self.register, 1);
             }
             Control(ClearW) => {
                 self.w = 0;
-                self.register.special().status().set(reg::STATUS::Z, true);
+                self.register
+                    .special()
+                    .status_mut()
+                    .set(reg::STATUS::Z, true);
                 self.pc += 2;
-                self.ticker.tick(1);
+                self.ticker.tick(&self.register, 1);
             }
             Control(MoveWtoF { f }) => {
                 self.register.at(f).write(self.w);
                 self.pc += 2;
-                self.ticker.tick(1);
+                self.ticker.tick(&self.register, 1);
             }
             Control(Goto { addr }) => {
-                self.pc = addr.0;
+                self.pc = addr.0 * 2;
                 self.pc |= ((self.register.special.pclath().read() & 0b0001_1000) as u16) << 8;
-                self.ticker.tick(1);
+                self.ticker.tick(&self.register, 2);
             }
             Control(Call { addr }) => {
                 // read: datasheets[0] P25
@@ -315,20 +321,20 @@ impl<T: Ticker> P16F88<T> {
                     .expect("callstack overflow");
                 // pclath: 0b0001_1xxx_0000_0000
                 // pc:     0b0000_0111_1111_1111
-                self.pc = addr.0;
+                self.pc = addr.0 * 2;
                 self.pc |= ((self.register.special.pclath().read() & 0b0001_1000) as u16) << 8;
-                self.ticker.tick(2);
+                self.ticker.tick(&self.register, 2);
             }
             Control(Return) => {
                 self.pc = self
                     .call_stack
                     .pop()
                     .expect("callstack underflow: callstack have no return address");
-                self.ticker.tick(2);
+                self.ticker.tick(&self.register, 2);
             }
             Control(Noop) => {
                 self.pc += 2;
-                self.ticker.tick(1);
+                self.ticker.tick(&self.register, 1);
             }
         }
     }
@@ -338,6 +344,7 @@ pub mod reg {
     #![allow(dead_code)]
 
     use crate::inst::RegisterFileAddr;
+    use concat_idents::concat_idents;
 
     pub trait Register {
         fn read(&self) -> u8;
@@ -354,7 +361,7 @@ pub mod reg {
         pub gpr: [GeneralPurposeRegister; 368],
     }
 
-    pub struct GeneralPurposeRegister(u8);
+    pub struct GeneralPurposeRegister(pub u8);
 
     special_registers! {
         // name    field   gen_struct   impl   init        unimpl      unstable on reset
@@ -591,7 +598,7 @@ pub mod reg {
         ($($addr:literal $bank0:ident$([$index0:literal])? $bank1:ident$([$index1:literal])? $bank2:ident$([$index2:literal])? $bank3:ident$([$index3:literal])?)+) => {
             impl Registers {
                 pub fn at(&mut self, addr: RegisterFileAddr) -> &mut dyn Register {
-                    let bank = (self.special.status().read() & 0b0110_0000) >> 5;
+                    let bank = (self.special.status_mut().read() & 0b0110_0000) >> 5;
                     match (bank, addr.0) {
                         (4.., _) => panic!("bank out of bounds"),
                         (_, 0x80..) => panic!("addr out of bounds"),
@@ -649,16 +656,21 @@ pub mod reg {
                 }
 
                 $(
-                    pub fn $lowername(&mut self) -> &mut $name {
-                        &mut self.$lowername
-                    }
+                    concat_idents! { mut_fn_name = $lowername, _mut {
+                        pub fn mut_fn_name(&mut self) -> &mut $name {
+                            &mut self.$lowername
+                        }
+                        pub fn $lowername(&self) -> &$name {
+                            &self.$lowername
+                        }
+                    }}
                 )+
             }
         };
 
         (@struct $name:ident y $unimplemented_mask:literal $initial_value:literal) => {
             #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
-            pub struct $name(u8);
+            pub struct $name(pub u8);
 
             impl $name {
                 const UNIMPLEMENTED: u8 = $unimplemented_mask;
@@ -680,12 +692,12 @@ pub mod reg {
         (@genstub $name:ident stub) => {
             impl Register for $name {
                 fn read(&self) -> u8 {
-                    log::warn!("{}: read stub!", stringify!($name));
+                    // log::warn!("{}: read stub!", stringify!($name));
                     self.0
                 }
 
                 fn write(&mut self, v: u8) {
-                    log::warn!("{}: write stub!", stringify!($name));
+                    // log::warn!("{}: write stub!", stringify!($name));
                     self.0 = v;
                 }
             }
