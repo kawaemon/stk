@@ -1,0 +1,5 @@
+build:
+    corepack pnpm i
+    wasm-pack build --target=nodejs --debug
+    cd pkg && node stk_web_minifier.js
+
