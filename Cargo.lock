@@ -1534,7 +1534,15 @@ dependencies = [
 name = "stk_web"
 version = "0.0.0"
 dependencies = [
+ "js-sys",
+ "once_cell",
  "stylist",
+ "time",
+ "tracing",
+ "tracing-subscriber",
+ "tracing-web",
+ "wasm-bindgen",
+ "web-sys",
  "yew",
 ]
 

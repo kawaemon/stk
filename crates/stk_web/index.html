@@ -5,9 +5,20 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-    <link data-trunk rel="rust" data-wasm-opt="z" />
+    <!-- weak refs are supported on 92% of global browser: https://caniuse.com/?search=weakref -->
+    <link data-trunk rel="rust" data-wasm-opt="z" data-weak-refs />
     <link data-trunk rel="css" href="assets/index.css" />
 
     <title>stk_web</title>
+    <style>
+      body {
+        height: 100vh;
+        overflow: hidden;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+      }
+    </style>
   </head>
 </html>
