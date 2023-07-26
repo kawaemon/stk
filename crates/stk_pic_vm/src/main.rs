@@ -1,6 +1,6 @@
 use std::{cell::RefCell, fs::File, io::BufReader, rc::Rc, time::Duration};
 
-use stk::{
+use stk_pic_vm::{
     hex::decode_intel_hex,
     vm::{reg::Register, Ticker, P16F88},
 };
@@ -35,7 +35,7 @@ fn main() {
         records: Vec<(u128, u8)>,
     }
     impl Ticker for LocalTickerInner {
-        fn tick(&mut self, reg: &stk::vm::reg::Registers, cycles: u8) {
+        fn tick(&mut self, reg: &stk_pic_vm::vm::reg::Registers, cycles: u8) {
             self.clocks += CLOCKS_PER_CYCLE * cycles as u128;
 
             let this_time = reg.special.porta().read();
@@ -51,7 +51,7 @@ fn main() {
     #[derive(Default, Clone)]
     struct LocalTicker(Rc<RefCell<LocalTickerInner>>);
     impl Ticker for LocalTicker {
-        fn tick(&mut self, reg: &stk::vm::reg::Registers, cycles: u8) {
+        fn tick(&mut self, reg: &stk_pic_vm::vm::reg::Registers, cycles: u8) {
             self.0.borrow_mut().tick(reg, cycles);
         }
     }

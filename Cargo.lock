@@ -1509,7 +1509,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
-name = "stk"
+name = "stk-web-minifier-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.22",
+]
+
+[[package]]
+name = "stk_pic_vm"
 version = "0.1.0"
 dependencies = [
  "arrayvec",
@@ -1519,15 +1528,6 @@ dependencies = [
  "env_logger",
  "log",
  "thiserror",
-]
-
-[[package]]
-name = "stk-web-minifier-macro"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.22",
 ]
 
 [[package]]
