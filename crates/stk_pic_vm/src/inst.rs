@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub struct RegisterFileAddr(pub u8);
 impl std::fmt::Debug for RegisterFileAddr {
@@ -41,12 +43,23 @@ pub enum Destination {
     F,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Instruction {
     ByteOriented(ByteOrientedInstruction),
     BitOriented(BitOrientedInstruction),
     LiteralOriented(LiteralOrientedInstruction),
     Control(ControlInstruction),
+}
+
+impl Debug for Instruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Instruction::ByteOriented(x) => write!(f, "{x:?}"),
+            Instruction::BitOriented(x) => write!(f, "{x:?}"),
+            Instruction::LiteralOriented(x) => write!(f, "{x:?}"),
+            Instruction::Control(x) => write!(f, "{x:?}"),
+        }
+    }
 }
 
 impl Instruction {
@@ -59,11 +72,21 @@ impl Instruction {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ByteOrientedInstruction {
     pub op: ByteOrientedOperation,
     pub f: RegisterFileAddr,
     pub dest: Destination,
+}
+
+impl Debug for ByteOrientedInstruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{:?}: F: 0x{:02x} into {:?}",
+            &self.op, self.f.0, &self.dest
+        )
+    }
 }
 
 impl ByteOrientedInstruction {
@@ -102,7 +125,7 @@ impl ByteOrientedInstruction {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ByteOrientedOperation {
     /// ```ignore
     /// W + *f -> destination
@@ -213,11 +236,17 @@ pub enum ByteOrientedOperation {
     XorWwithF,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct BitOrientedInstruction {
     pub op: BitOrientedOperation,
     pub b: BitIndex,
     pub f: RegisterFileAddr,
+}
+
+impl Debug for BitOrientedInstruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}(0x{:02x}<{}>)", self.op, self.f.0, self.b.0)
+    }
 }
 
 impl BitOrientedInstruction {
@@ -246,7 +275,7 @@ impl BitOrientedInstruction {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BitOrientedOperation {
     /// ```ignore
     /// 0 -> f<b>
@@ -285,10 +314,16 @@ pub enum BitOrientedOperation {
     SkipIfFBitSet,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct LiteralOrientedInstruction {
     pub op: LiteralOrientedOperation,
     pub k: u8,
+}
+
+impl Debug for LiteralOrientedInstruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}({})", &self.op, self.k)
+    }
 }
 
 impl LiteralOrientedInstruction {
@@ -328,7 +363,7 @@ impl LiteralOrientedInstruction {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LiteralOrientedOperation {
     /// ```ignore
     /// k - W -> W
@@ -381,7 +416,7 @@ pub enum LiteralOrientedOperation {
     AndLiteralWithW,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ControlInstruction {
     /// ```ignore
     /// 0 -> WDT
@@ -460,6 +495,23 @@ pub enum ControlInstruction {
     /// - affects: None
     #[doc(alias = "movwf")]
     MoveWtoF { f: RegisterFileAddr },
+}
+
+impl Debug for ControlInstruction {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ClearWatchDogTimer => write!(fmt, "ClearWatchDogTimer"),
+            Self::ReturnFromInterrupt => write!(fmt, "ReturnFromInterrupt"),
+            Self::Return => write!(fmt, "Return"),
+            Self::Sleep => write!(fmt, "Sleep"),
+            Self::Noop => write!(fmt, "Noop"),
+            Self::Goto { addr } => write!(fmt, "Goto(0x{:04x})", addr.0),
+            Self::Call { addr } => write!(fmt, "Call(0x{:04x})", addr.0),
+            Self::ClearF { f } => write!(fmt, "ClearF(0x{:02x})", f.0),
+            Self::ClearW => write!(fmt, "ClearW"),
+            Self::MoveWtoF { f } => write!(fmt, "MoveWtoF(0x{:02x})", f.0),
+        }
+    }
 }
 
 impl ControlInstruction {
