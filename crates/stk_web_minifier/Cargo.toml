@@ -12,7 +12,7 @@ console_error_panic_hook = "0.1"
 dotenv = "0.15"
 hex = "0.4"
 js-sys = "0.3"
-stk-web-minifier-macro = { path = "../stk_web_minifier_macro" }
+stk-macro = { path = "../stk_macro" }
 once_cell = "1.18"
 sha2 = "0.10"
 time = { version = "0.3", features = ["wasm-bindgen"] }
@@ -31,10 +31,4 @@ getrandom = { version = "0.2", features = ["js"] }
 
 [dependencies.swc_core]
 version = "0.78"
-features = [
-    "common",
-    "ecma_ast",
-    "ecma_codegen",
-    "ecma_parser",
-    "ecma_visit",
-]
+features = ["common", "ecma_ast", "ecma_codegen", "ecma_parser", "ecma_visit"]

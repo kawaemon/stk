@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use stk_web_minifier_macro::struct_map;
+use stk_macro::struct_map;
 use wasm_encoder::{ConstExpr, ElementSegment};
 
 macro_rules! enum_map {
