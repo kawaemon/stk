@@ -56,6 +56,8 @@ impl<R: Read> IntelHexDecoder<R> {
     pub fn decode(mut self) -> Result<Vec<u8>> {
         let mut decoded = vec![];
 
+        let mut upper_address = 0u16;
+
         loop {
             let mut buf = [0; 1];
             self.reader.read_exact(&mut buf).map_err(Error::Io)?;
@@ -65,7 +67,7 @@ impl<R: Read> IntelHexDecoder<R> {
             }
 
             let byte_count = self.decode_hex_u8()?;
-            let address = self.decode_hex_u16()? as u32; // for extended linear address command
+            let address = ((upper_address as u32) << 16) | self.decode_hex_u16()? as u32;
 
             let record_type = self.decode_hex_u8()?;
 
@@ -84,7 +86,11 @@ impl<R: Read> IntelHexDecoder<R> {
                 // EOF
                 1 => break,
 
-                2..=5 => unimplemented!(),
+                4 => {
+                    upper_address = self.decode_hex_u16()?;
+                }
+
+                i @ 2..=5 => unimplemented!("record type {i}"),
 
                 _ => return Err(Error::UnknownRecordType { found: record_type }),
             }
