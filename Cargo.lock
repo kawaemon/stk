@@ -1611,7 +1611,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
-name = "stk-hd44780u-vm"
+name = "stk-hd44780-vm"
 version = "0.1.0"
 
 [[package]]
@@ -1624,7 +1624,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "stk_pic_vm"
+name = "stk-pic-vm"
 version = "0.1.0"
 dependencies = [
  "arrayvec",
@@ -1638,7 +1638,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "stk_web"
+name = "stk-web"
 version = "0.0.0"
 dependencies = [
  "stylist",
@@ -1646,7 +1646,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "stk_web_minifier"
+name = "stk-web-minifier"
 version = "0.1.0"
 dependencies = [
  "anyhow",

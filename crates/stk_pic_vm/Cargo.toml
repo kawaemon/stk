@@ -1,5 +1,5 @@
 [package]
-name = "stk_pic_vm"
+name = "stk-pic-vm"
 version = "0.1.0"
 edition = "2021"
 
