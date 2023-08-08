@@ -1,13 +1,11 @@
 use arrayvec::ArrayVec;
 
-use crate::{
-    inst::{
-        BitOrientedInstruction, BitOrientedOperation, ByteOrientedInstruction,
-        ByteOrientedOperation, ControlInstruction, Destination, Instruction,
-        LiteralOrientedInstruction, LiteralOrientedOperation, RegisterFileAddr,
-    },
-    vm::p16f88::reg::Register,
+use crate::inst::{
+    BitOrientedInstruction, BitOrientedOperation, ByteOrientedInstruction, ByteOrientedOperation,
+    ControlInstruction, Destination, Instruction, LiteralOrientedInstruction,
+    LiteralOrientedOperation, RegisterFileAddr,
 };
+use crate::vm::p16f88::reg::Register;
 
 // datasheets:
 //   - https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/30487D.pdf
@@ -65,14 +63,15 @@ impl P16F88 {
     }
 
     pub fn exec(&mut self, inst: Instruction, ticker: &mut impl Ticker) {
-        use BitOrientedInstruction as B;
         use BitOrientedOperation::*;
-        use ByteOrientedInstruction as Y;
         use ByteOrientedOperation::*;
         use ControlInstruction::*;
         use Instruction::*;
-        use LiteralOrientedInstruction as L;
         use LiteralOrientedOperation::*;
+        use {
+            BitOrientedInstruction as B, ByteOrientedInstruction as Y,
+            LiteralOrientedInstruction as L,
+        };
 
         macro_rules! gen {
             (@lit $op:expr) => {
@@ -97,9 +96,6 @@ impl P16F88 {
                 ticker.tick(self, 1);
             };
         }
-
-        // TODO: overflow check
-        // TODO: status flags
 
         match inst {
             ByteOriented(Y { op: AddWf, f, dest }) => {
@@ -343,7 +339,7 @@ impl P16F88 {
                 self.pc = self
                     .call_stack
                     .pop()
-                    .expect("callstack underflow: callstack have no return address");
+                    .expect("callstack underflow: callstack has no return address");
                 ticker.tick(self, 2);
             }
             Control(Noop) => {
@@ -357,8 +353,9 @@ impl P16F88 {
 pub mod reg {
     #![allow(dead_code)]
 
-    use crate::inst::RegisterFileAddr;
     use concat_idents::concat_idents;
+
+    use crate::inst::RegisterFileAddr;
 
     pub trait Register {
         fn read(&self) -> u8;
@@ -783,6 +780,5 @@ pub mod reg {
         }
     }
 
-    use register_map;
-    use special_registers;
+    use {register_map, special_registers};
 }

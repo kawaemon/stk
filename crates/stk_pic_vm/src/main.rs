@@ -1,13 +1,14 @@
-use std::{fmt::Debug, fs::File, io::BufReader, path::PathBuf, time::Duration};
-
-use stk_pic_vm::{
-    hex::decode_intel_hex,
-    vm::p16f88::{reg::Registers, Ticker, P16F88},
-};
-
-use stk_hd44780_vm::{Hd44780, Hd44780PinState, PinObserver};
+use std::fmt::Debug;
+use std::fs::File;
+use std::io::BufReader;
+use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::Parser;
+use stk_hd44780_vm::{Hd44780, Hd44780PinState, PinObserver};
+use stk_pic_vm::hex::decode_intel_hex;
+use stk_pic_vm::vm::p16f88::reg::Registers;
+use stk_pic_vm::vm::p16f88::{Ticker, P16F88};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -148,9 +149,6 @@ fn main() {
     let mut vm = P16F88::new(flash.try_into().unwrap());
     loop {
         vm.step(&mut ticker);
-        // if RefCell::borrow(&ticker.0).clocks > CLOCKS_PER_SEC * 3 {
-        //     break;
-        // }
         if vm.pc() * 2 > 7000 {
             break;
         }

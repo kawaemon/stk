@@ -1,10 +1,13 @@
-use std::{fmt::Debug, fs::File, io::BufReader, path::PathBuf};
+use std::fmt::Debug;
+use std::fs::File;
+use std::io::BufReader;
+use std::path::PathBuf;
 
 use clap::Parser;
-use stk_pic_vm::{
-    inst::{BitOrientedInstruction, ByteOrientedInstruction, ControlInstruction, Instruction},
-    vm::p16f88,
+use stk_pic_vm::inst::{
+    BitOrientedInstruction, ByteOrientedInstruction, ControlInstruction, Instruction,
 };
+use stk_pic_vm::vm::p16f88;
 
 #[derive(Parser, Debug)]
 struct Args {
