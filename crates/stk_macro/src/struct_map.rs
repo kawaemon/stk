@@ -18,21 +18,12 @@ impl Parse for Mapping {
         if input.peek(Token![:]) {
             let _: Token![:] = input.parse()?;
             if input.peek(Brace) {
-                return Ok(Mapping::Map {
-                    to,
-                    b: input.parse()?,
-                });
+                return Ok(Mapping::Map { to, b: input.parse()? });
             }
-            return Ok(Mapping::Move {
-                from: input.parse()?,
-                to,
-            });
+            return Ok(Mapping::Move { from: input.parse()?, to });
         }
 
-        Ok(Mapping::Move {
-            from: to.clone(),
-            to,
-        })
+        Ok(Mapping::Move { from: to.clone(), to })
     }
 }
 
@@ -59,12 +50,7 @@ impl Parse for StructMap {
         braced!(mappings in input);
         let mappings = mappings.parse_terminated(Mapping::parse, Token![,])?;
 
-        Ok(StructMap {
-            name,
-            from_bind,
-            from,
-            mappings,
-        })
+        Ok(StructMap { name, from_bind, from, mappings })
     }
 }
 
@@ -87,13 +73,7 @@ pub(crate) fn struct_map(input: TokenStream) -> TokenStream {
     let mut res = quote!();
 
     for map in maps {
-        let StructMap {
-            name,
-            from,
-            mappings,
-            from_bind,
-            ..
-        } = map;
+        let StructMap { name, from, mappings, from_bind, .. } = map;
 
         let mut fields = quote!();
         for map in mappings {

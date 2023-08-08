@@ -116,7 +116,9 @@ impl VisitMut for FunctionToArrowFn {
             return;
         }
 
-        let Some(arrow_fn) = map_function(*f.function.clone()) else { return };
+        let Some(arrow_fn) = map_function(*f.function.clone()) else {
+            return;
+        };
         *n = Expr::Arrow(arrow_fn);
     }
 
@@ -125,15 +127,14 @@ impl VisitMut for FunctionToArrowFn {
 
         let Decl::Fn(f) = n else { return };
 
-        let Some(arrow_fn) = map_function(*f.function.clone()) else { return };
+        let Some(arrow_fn) = map_function(*f.function.clone()) else {
+            return;
+        };
 
         let span = f.function.span;
         let d = VarDeclarator {
             span,
-            name: Pat::Ident(BindingIdent {
-                id: f.ident.clone(),
-                type_ann: None,
-            }),
+            name: Pat::Ident(BindingIdent { id: f.ident.clone(), type_ann: None }),
             init: Some(Box::new(Expr::Arrow(arrow_fn))),
             definite: false,
         };
@@ -154,10 +155,7 @@ pub struct RenameArguments {
 }
 impl RenameArguments {
     fn new(replacement: JsWord) -> Self {
-        Self {
-            replacement,
-            have_arguments: false,
-        }
+        Self { replacement, have_arguments: false }
     }
 }
 impl VisitMut for RenameArguments {
@@ -267,11 +265,9 @@ where
             return;
         };
 
-        let Some(rep_ident) = (self.should_replace)(&lit.value) else { return };
-        *expr = Expr::Ident(Ident {
-            span: DUMMY_SP,
-            sym: rep_ident,
-            optional: false,
-        });
+        let Some(rep_ident) = (self.should_replace)(&lit.value) else {
+            return;
+        };
+        *expr = Expr::Ident(Ident { span: DUMMY_SP, sym: rep_ident, optional: false });
     }
 }
