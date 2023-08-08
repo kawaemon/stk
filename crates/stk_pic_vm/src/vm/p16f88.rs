@@ -13,34 +13,32 @@ use crate::{
 //   - https://ww1.microchip.com/downloads/aemDocuments/documents/MCU08/ProductDocuments/DataSheets/30487D.pdf
 //   - https://ww1.microchip.com/downloads/en/DeviceDoc/31029a.pdf
 
-pub struct P16F88<T: Ticker> {
-    w: u8,
-    pc: u16,
-    flash: [u8; 7168],
-    call_stack: ArrayVec<u16, 8>,
-    register: reg::Registers,
-    ticker: T,
+pub struct P16F88 {
+    pub w: u8,
+    pub pc: u16,
+    pub flash: [u8; 7168],
+    pub call_stack: ArrayVec<u16, 8>,
+    pub register: reg::Registers,
 }
 
 pub fn register_name_at(addr: RegisterFileAddr) -> Vec<&'static str> {
     reg::Registers::register_name_at(addr)
 }
 
-// FIXME: this should be independent on P16F88 registers
+// FIXME: this should be independent on P16F88
 pub trait Ticker {
-    fn tick(&mut self, reg: &reg::Registers, cycles: u8);
+    fn tick(&mut self, vm: &P16F88, cycles: u8);
 }
 
-impl<T: Ticker> P16F88<T> {
+impl P16F88 {
     #[allow(clippy::new_without_default)]
-    pub fn new(flash: [u8; 7168], ticker: T) -> Self {
+    pub fn new(flash: [u8; 7168]) -> Self {
         P16F88 {
             w: 0,
             pc: 0,
             flash,
             call_stack: ArrayVec::new(),
             register: reg::Registers::new(),
-            ticker,
         }
     }
 
@@ -48,13 +46,13 @@ impl<T: Ticker> P16F88<T> {
         self.pc
     }
 
-    pub fn step(&mut self) {
-        let a = self.flash[self.pc as usize];
-        let b = self.flash[(self.pc + 1) as usize];
+    pub fn step(&mut self, ticker: &mut impl Ticker) {
+        let a = self.flash[(self.pc * 2) as usize];
+        let b = self.flash[((self.pc * 2) as usize) + 1];
         let bytecode = ((b as u16) << 8) | (a as u16);
         let inst =
             Instruction::from_code(bytecode).expect("couldn't decode bytecode into instruction");
-        self.exec(inst);
+        self.exec(inst, ticker);
     }
 
     fn dc(a: u8, b: u8) -> bool {
@@ -66,7 +64,7 @@ impl<T: Ticker> P16F88<T> {
         // | (false & p(0) & p(1) & p(2) & p(3))
     }
 
-    pub fn exec(&mut self, inst: Instruction) {
+    pub fn exec(&mut self, inst: Instruction, ticker: &mut impl Ticker) {
         use BitOrientedInstruction as B;
         use BitOrientedOperation::*;
         use ByteOrientedInstruction as Y;
@@ -79,8 +77,8 @@ impl<T: Ticker> P16F88<T> {
         macro_rules! gen {
             (@lit $op:expr) => {
                 $op;
-                self.pc += 2;
-                self.ticker.tick(&self.register, 1);
+                self.pc += 1;
+                ticker.tick(self, 1);
             };
 
             (@byte $f:ident, $d:ident, |$r:ident| $op:expr) => {
@@ -95,8 +93,8 @@ impl<T: Ticker> P16F88<T> {
                         self.register.at($f).write(res);
                     }
                 }
-                self.pc += 2;
-                self.ticker.tick(&self.register, 1);
+                self.pc += 1;
+                ticker.tick(self, 1);
             };
         }
 
@@ -144,8 +142,8 @@ impl<T: Ticker> P16F88<T> {
                     Destination::F => self.register.at(f).write(ret),
                 }
                 let skip = ret == 0;
-                self.pc += if skip { 4 } else { 2 };
-                self.ticker.tick(&self.register, if skip { 2 } else { 1 });
+                self.pc += if skip { 2 } else { 1 };
+                ticker.tick(self, if skip { 2 } else { 1 });
             }
             ByteOriented(Y { op: IncrementF, f, dest }) => {
                 gen!(@byte f, dest, |x| {
@@ -161,8 +159,8 @@ impl<T: Ticker> P16F88<T> {
                     Destination::F => self.register.at(f).write(res),
                 }
                 let skip = res == 0;
-                self.pc += if skip { 4 } else { 2 };
-                self.ticker.tick(&self.register, if skip { 2 } else { 1 });
+                self.pc += if skip { 2 } else { 1 };
+                ticker.tick(self, if skip { 2 } else { 1 });
             }
             ByteOriented(Y { op: OrWf, f, dest }) => {
                 gen!(@byte f, dest, |x| {
@@ -234,37 +232,39 @@ impl<T: Ticker> P16F88<T> {
             BitOriented(B { op: BitClearF, b, f }) => {
                 let mask = 0b0000_0001 << b.0;
                 self.register.at(f).write_with(&|x| x & (!mask));
-                self.pc += 2;
-                self.ticker.tick(&self.register, 1);
+                self.pc += 1;
+                ticker.tick(self, 1);
             }
             BitOriented(B { op: BitSetF, b, f }) => {
                 let mask = 0b0000_0001 << b.0;
                 self.register.at(f).write_with(&|x| x | mask);
-                self.pc += 2;
-                self.ticker.tick(&self.register, 1);
+                self.pc += 1;
+                ticker.tick(self, 1);
             }
             BitOriented(B { op: SkipIfFBitClear, b, f }) => {
                 let mask = 0b0000_0001 << b.0;
                 let skip = (self.register.at(f).read() & mask) == 0;
-                self.pc += if skip { 4 } else { 2 };
-                self.ticker.tick(&self.register, if skip { 2 } else { 1 });
+                self.pc += if skip { 2 } else { 1 };
+                ticker.tick(self, if skip { 2 } else { 1 });
             }
             BitOriented(B { op: SkipIfFBitSet, b, f }) => {
                 let mask = 0b0000_0001 << b.0;
                 let skip = (self.register.at(f).read() & mask) != 0;
-                self.pc += if skip { 4 } else { 2 };
-                self.ticker.tick(&self.register, if skip { 2 } else { 1 });
+                self.pc += if skip { 2 } else { 1 };
+                ticker.tick(self, if skip { 2 } else { 1 });
             }
             LiteralOriented(L { op: SubtractWFromLiteral, k }) => {
                 gen!(@lit {
                     let a = k;
                     let b = (!self.w).wrapping_add(1);
-                    let (res, overflow) = k.overflowing_add(b);
+                    let (res, overflow) = a.overflowing_add(b);
+
+                    self.w = res;
+
                     let st = self.register.special().status_mut();
                     st.set(reg::STATUS::Z, self.w == 0);
                     st.set(reg::STATUS::C, overflow);
                     st.set(reg::STATUS::DC, Self::dc(a, b));
-                    self.w = res;
                 });
             }
             LiteralOriented(L { op: XorLiteralWithW, k }) => {
@@ -290,15 +290,15 @@ impl<T: Ticker> P16F88<T> {
             }
             LiteralOriented(L { op: ReturnWithLiteralInW, k }) => {
                 self.w = k;
-                self.exec(Instruction::Control(Return));
+                self.exec(Instruction::Control(Return), ticker);
             }
             Control(ClearWatchDogTimer | Sleep) => {
-                self.pc += 2;
-                self.ticker.tick(&self.register, 1);
+                self.pc += 1;
+                ticker.tick(self, 1);
             }
             Control(ReturnFromInterrupt) => {
-                self.pc += 2;
-                self.ticker.tick(&self.register, 2);
+                self.pc += 1;
+                ticker.tick(self, 2);
             }
             Control(ClearF { f }) => {
                 self.register.at(f).write(0);
@@ -306,8 +306,8 @@ impl<T: Ticker> P16F88<T> {
                     .special()
                     .status_mut()
                     .set(reg::STATUS::Z, true);
-                self.pc += 2;
-                self.ticker.tick(&self.register, 1);
+                self.pc += 1;
+                ticker.tick(self, 1);
             }
             Control(ClearW) => {
                 self.w = 0;
@@ -315,40 +315,40 @@ impl<T: Ticker> P16F88<T> {
                     .special()
                     .status_mut()
                     .set(reg::STATUS::Z, true);
-                self.pc += 2;
-                self.ticker.tick(&self.register, 1);
+                self.pc += 1;
+                ticker.tick(self, 1);
             }
             Control(MoveWtoF { f }) => {
                 self.register.at(f).write(self.w);
-                self.pc += 2;
-                self.ticker.tick(&self.register, 1);
+                self.pc += 1;
+                ticker.tick(self, 1);
             }
             Control(Goto { addr }) => {
-                self.pc = addr.0 * 2;
+                self.pc = addr.0;
                 self.pc |= ((self.register.special.pclath().read() & 0b0001_1000) as u16) << 8;
-                self.ticker.tick(&self.register, 2);
+                ticker.tick(self, 2);
             }
             Control(Call { addr }) => {
                 // read: datasheets[0] P25
                 self.call_stack
-                    .try_push(self.pc + 2)
+                    .try_push(self.pc + 1)
                     .expect("callstack overflow");
                 // pclath: 0b0001_1xxx_0000_0000
                 // pc:     0b0000_0111_1111_1111
-                self.pc = addr.0 * 2;
+                self.pc = addr.0;
                 self.pc |= ((self.register.special.pclath().read() & 0b0001_1000) as u16) << 8;
-                self.ticker.tick(&self.register, 2);
+                ticker.tick(self, 2);
             }
             Control(Return) => {
                 self.pc = self
                     .call_stack
                     .pop()
                     .expect("callstack underflow: callstack have no return address");
-                self.ticker.tick(&self.register, 2);
+                ticker.tick(self, 2);
             }
             Control(Noop) => {
-                self.pc += 2;
-                self.ticker.tick(&self.register, 1);
+                self.pc += 1;
+                ticker.tick(self, 1);
             }
         }
     }
@@ -743,7 +743,7 @@ pub mod reg {
         (@genstub $name:ident unimpl) => {
             impl Register for $name {
                 fn read(&self) -> u8 {
-                    log::warn!("{}: tried to read the reserved register!: reading 0", stringify!($name));
+                    tracing::warn!("{}: tried to read the reserved register!: reading 0", stringify!($name));
                     0
                 }
 

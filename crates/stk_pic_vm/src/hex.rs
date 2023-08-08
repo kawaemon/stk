@@ -74,7 +74,7 @@ impl<R: Read> IntelHexDecoder<R> {
             match record_type {
                 // data record
                 0 => {
-                    log::debug!("addr=0x{address:x}, bytes={byte_count}");
+                    tracing::debug!("addr=0x{address:x}, bytes={byte_count}");
                     for i in 0..byte_count {
                         let b = self.decode_hex_u8()?;
                         let pos = (address + i as u32) as usize;
