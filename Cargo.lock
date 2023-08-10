@@ -1617,6 +1617,7 @@ dependencies = [
  "clap",
  "concat-idents",
  "stk-hd44780-vm",
+ "stk-macro",
  "thiserror",
  "tracing",
  "tracing-subscriber",

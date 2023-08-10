@@ -1,5 +1,7 @@
 use std::fmt::Debug;
 
+use stk_macro::bitmaskeq;
+
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub struct RegisterFileAddr(pub u8);
 impl std::fmt::Debug for RegisterFileAddr {
@@ -516,34 +518,20 @@ impl Debug for ControlInstruction {
 
 impl ControlInstruction {
     pub fn from_code(i: u16) -> Option<ControlInstruction> {
-        match i {
-            0b0000_0000_0000_1000 => Some(ControlInstruction::Return),
-            0b0000_0000_0110_0100 => Some(ControlInstruction::ClearWatchDogTimer),
-            0b0000_0000_0000_1001 => Some(ControlInstruction::ReturnFromInterrupt),
-            0b0000_0000_0110_0011 => Some(ControlInstruction::Sleep),
-            i if (i & 0b0011_1111_1001_1111) == 0b0000_0000_0000_0000 => {
-                Some(ControlInstruction::Noop)
+        bitmaskeq! {
+            match i {
+                0b0000_0000_0000_1000 => Some(ControlInstruction::Return),
+                0b0000_0000_0110_0100 => Some(ControlInstruction::ClearWatchDogTimer),
+                0b0000_0000_0000_1001 => Some(ControlInstruction::ReturnFromInterrupt),
+                0b0000_0000_0110_0011 => Some(ControlInstruction::Sleep),
+                m_xx00_0000_0xx0_0000 => Some(ControlInstruction::Noop),
+                m_xx00_0001_0xxx_xxxx => Some(ControlInstruction::ClearW),
+                m_xx10_1aaa_aaaa_aaaa => Some(ControlInstruction::Goto { addr: ProgramAddr::new(a) }),
+                m_xx10_0aaa_aaaa_aaaa => Some(ControlInstruction::Call { addr: ProgramAddr::new(a) }),
+                m_xx00_0001_1fff_ffff => Some(ControlInstruction::ClearF { f: RegisterFileAddr::new(f as u8) }),
+                m_xx00_0000_1fff_ffff => Some(ControlInstruction::MoveWtoF { f: RegisterFileAddr::new(f as u8) }),
+                _ => None,
             }
-            i if (i & 0b0011_1111_1000_0000) == 0b0000_0001_0000_0000 => {
-                Some(ControlInstruction::ClearW)
-            }
-            i if (i & 0b0011_1000_0000_0000) == 0b0010_1000_0000_0000 => {
-                Some(ControlInstruction::Goto { addr: ProgramAddr::new(i & 0b0000_0111_1111_1111) })
-            }
-            i if (i & 0b0011_1000_0000_0000) == 0b0010_0000_0000_0000 => {
-                Some(ControlInstruction::Call { addr: ProgramAddr::new(i & 0b0000_0111_1111_1111) })
-            }
-            i if (i & 0b0011_1111_1000_0000) == 0b0000_0001_1000_0000 => {
-                Some(ControlInstruction::ClearF {
-                    f: RegisterFileAddr::new((i & 0b0000_0000_0111_1111) as u8),
-                })
-            }
-            i if (i & 0b0011_1111_1000_0000) == 0b0000_0000_1000_0000 => {
-                Some(ControlInstruction::MoveWtoF {
-                    f: RegisterFileAddr::new((i & 0b0000_0000_0111_1111) as u8),
-                })
-            }
-            _ => None,
         }
     }
 }

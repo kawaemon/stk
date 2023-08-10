@@ -7,3 +7,5 @@ edition = "2021"
 
 [dependencies]
 tracing = "0.1.37"
+
+stk-macro = { path = "../stk_macro" }

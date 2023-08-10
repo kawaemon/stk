@@ -28,6 +28,8 @@ const CGROM: &[char; 256] = &[
 pub struct Hd44780 {
     /// instruction register
     ir: u8,
+
+    #[allow(dead_code)]
     /// data register
     dr: u8,
 
@@ -346,53 +348,37 @@ impl Debug for Instruction {
 impl Instruction {
     fn decode(rs: bool, rw: bool, x: u8) -> Option<Self> {
         if !rs && !rw {
-            if x == 0b0000_0001 {
-                return Some(Self::ClearDisplay);
-            }
+            stk_macro::bitmaskeq! {
+                match x {
+                    0b0000_0001 => return Some(Self::ClearDisplay),
+                    m_0000_001x => return Some(Self::ReturnHome),
+                    m_0000_01is => return Some(Self::EntryModeSet {
+                        id: i != 0,
+                        s: s != 0,
+                    }),
+                    m_0000_1dcb => return Some(Self::DisplayControl {
+                        d: d != 0,
+                        c: c != 0,
+                        b: b != 0,
+                    }),
+                    m_0001_clxx => return Some(Self::Shift {
+                        sc: c != 0,
+                        rl: l != 0,
+                    }),
+                    m_001d_nfxx => return Some(Self::FunctionSet {
+                        dl: (x & 0b0001_0000) != 0,
+                        n: (x & 0b0000_1000) != 0,
+                        f: (x & 0b0000_0100) != 0,
+                    }),
+                    m_11aa_aaaa => return Some(Self::CgRamAddressSet { addr: a }),
 
-            if (x & 0b1111_1110) == 0b0000_0010 {
-                return Some(Self::ReturnHome);
-            }
+                    // P31
+                    // RS RW DB
+                    // 1  0  D
+                    m_1aaa_aaaa => return Some(Self::DdRamAddressSet { addr: a }),
 
-            if (x & 0b1111_1100) == 0b0000_0100 {
-                return Some(Self::EntryModeSet {
-                    id: (x & 0b0000_0010) != 0,
-                    s: (x & 0b0000_0001) != 0,
-                });
-            }
-
-            if (x & 0b1111_1000) == 0b0000_1000 {
-                return Some(Self::DisplayControl {
-                    d: (x & 0b0000_0100) != 0,
-                    c: (x & 0b0000_0010) != 0,
-                    b: (x & 0b0000_0001) != 0,
-                });
-            }
-
-            if (x & 0b1111_0000) == 0b0001_0000 {
-                return Some(Self::Shift {
-                    sc: (x & 0b0000_1000) != 0,
-                    rl: (x & 0b0000_0100) != 0,
-                });
-            }
-
-            if (x & 0b1110_0000) == 0b0010_0000 {
-                return Some(Self::FunctionSet {
-                    dl: (x & 0b0001_0000) != 0,
-                    n: (x & 0b0000_1000) != 0,
-                    f: (x & 0b0000_0100) != 0,
-                });
-            }
-
-            if (x & 0b1100_0000) == 0b1100_0000 {
-                return Some(Self::CgRamAddressSet { addr: x & 0b0011_1111 });
-            }
-
-            // P31
-            // RS RW DB
-            // 1  0  D
-            if (x & 0b1000_0000) == 0b1000_0000 {
-                return Some(Self::DdRamAddressSet { addr: x & 0b0111_1111 });
+                    _ => {},
+                }
             }
         }
 
