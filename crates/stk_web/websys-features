@@ -2,6 +2,7 @@
       Adding web-sys v0.3.67 to dependencies.
              Features:
              + CanvasRenderingContext2d
+             + CssStyleDeclaration
              + DomRect
              + DomRectReadOnly
              + Element
@@ -238,7 +239,6 @@
              - CssPseudoElement
              - CssRule
              - CssRuleList
-             - CssStyleDeclaration
              - CssStyleRule
              - CssStyleSheet
              - CssStyleSheetParsingMode

@@ -25,4 +25,5 @@ web-sys = { version = "0.3.67", features = [
     "ResizeObserver",
     "ResizeObserverEntry",
     "TextMetrics",
+    "CssStyleDeclaration",
 ] }

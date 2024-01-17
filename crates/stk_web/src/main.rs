@@ -17,7 +17,8 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::wasm_bindgen::closure::Closure;
 use web_sys::wasm_bindgen::JsCast;
 use web_sys::{
-    CanvasRenderingContext2d, Element, Event, HtmlCanvasElement, MouseEvent, ResizeObserverEntry,
+    CanvasRenderingContext2d, Element, Event, HtmlCanvasElement, HtmlElement, MouseEvent,
+    ResizeObserverEntry,
 };
 
 fn main() {
@@ -106,12 +107,20 @@ async fn run() {
 
 struct RenderLoop {
     app: Rc<RefCell<App>>,
+    canvas: HtmlCanvasElement,
     _resize_observer: ResizeObserver,
-    _click_event: EventListener,
-    _mousemove_event: EventListener,
+    event_listeners: Vec<EventListener>,
 }
 
 impl RenderLoop {
+    fn listen(&mut self, event: &'static str, mut f: impl FnMut(&mut App, &Event) + 'static) {
+        let ev = EventListener::new(&self.canvas, event, {
+            let app = Rc::clone(&self.app);
+            move |event| f(&mut app.borrow_mut(), event)
+        });
+        self.event_listeners.push(ev);
+    }
+
     fn new(canvas: HtmlCanvasElement) -> Self {
         let ctx = canvas.get_context("2d").unwrap().unwrap();
         let ctx: CanvasRenderingContext2d = ctx.dyn_into().unwrap();
@@ -124,22 +133,22 @@ impl RenderLoop {
         });
         _resize_observer.observe(&canvas);
 
-        let _click_event = EventListener::new(&canvas, "click", {
-            let app = Rc::clone(&app);
-            move |event| app.borrow_mut().on_click(event)
-        });
-
-        let _mousemove_event = EventListener::new(&canvas, "mousemove", {
-            let app = Rc::clone(&app);
-            move |event| app.borrow_mut().on_mousemove(event)
-        });
-
-        Self {
+        let mut me = Self {
             app,
+            canvas,
             _resize_observer,
-            _click_event,
-            _mousemove_event,
+            event_listeners: vec![],
+        };
+
+        {
+            use MouseEventType::*;
+            me.listen("click", |app, ev| app.on_mouse_event(ev, Click));
+            me.listen("mouseup", |app, ev| app.on_mouse_event(ev, Up));
+            me.listen("mousedown", |app, ev| app.on_mouse_event(ev, Down));
+            me.listen("mousemove", |app, ev| app.on_mouse_event(ev, Move));
         }
+
+        me
     }
 
     async fn run(&mut self) {
@@ -150,19 +159,28 @@ impl RenderLoop {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum MouseEventType {
+    Up,
+    Down,
+    Click,
+    Move,
+}
+
 struct App {
     ctx: CanvasRenderingContext2d,
     main_scene: MainScene,
 }
 
 impl App {
-    fn on_resize(&self) {
+    fn on_resize(&mut self) {
         let canvas = self.ctx.canvas().unwrap();
         let w = canvas.client_width() as u32;
         let h = canvas.client_height() as u32;
         canvas.set_width(w);
         canvas.set_height(h);
         tracing::info!("canvas resized to {w}x{h}");
+        self.main_scene.render(&self.ctx);
     }
 
     fn mouse_event_to_pos(&self, m: &Event) -> AbsolutePos {
@@ -173,17 +191,10 @@ impl App {
         AbsolutePos { x, y }
     }
 
-    fn on_click(&mut self, event: &Event) {
-        let pos = self.mouse_event_to_pos(event);
-        // tracing::info!("click: {}x{}", pos.x, pos.y);
-
-        self.main_scene
-            .on_click(Renderer::new(&self.ctx).to_rel_pos(pos));
-    }
-
-    fn on_mousemove(&self, event: &Event) {
-        let pos = self.mouse_event_to_pos(event);
-        // tracing::info!("move: {}x{}", pos.x, pos.y);
+    fn on_mouse_event(&mut self, ev: &Event, ty: MouseEventType) {
+        let pos = self.mouse_event_to_pos(ev);
+        let pos = Renderer::new(&self.ctx).to_rel_pos(pos);
+        self.main_scene.on_mouse_event(&self.ctx, pos, ty);
     }
 
     fn render(&mut self) {
@@ -194,6 +205,7 @@ impl App {
 struct MainScene {
     i: usize,
     button: Button,
+    movable: Movable,
 }
 
 impl MainScene {
@@ -201,25 +213,23 @@ impl MainScene {
         Self {
             i: 0,
             button: Button {
-                rect: Rect::new(45.0, 45.0, 10.0, 10.0),
+                rect: Rect::new(20.0, 20.0, 10.0, 10.0),
                 on: false,
                 text: "テストボタン".into(),
+            },
+            movable: Movable {
+                entries: vec![MovableEntry::new(
+                    DrawableRect { rect: Rect::new(0.0, 0.0, 10.0, 10.0) },
+                    Pos::new(45.0, 45.0),
+                )],
             },
         }
     }
 
-    fn on_click(&mut self, pos: Pos) {
-        self.button.on_click(pos);
-    }
-
-    fn render(&mut self, ctx: &CanvasRenderingContext2d) {
+    fn renderer(&self, ctx: &CanvasRenderingContext2d) -> Renderer {
         let canvas = ctx.canvas().unwrap();
         let width = canvas.width() as f64;
         let height = canvas.height() as f64;
-
-        ctx.set_fill_style(&JsValue::from_str("gray"));
-        ctx.fill_rect(0.0, 0.0, width, height);
-
         let (size, offset) = {
             let (as_w, as_h) = (16.0, 9.0);
             let a = AbsoluteSize { w: width, h: width / as_w * as_h };
@@ -233,17 +243,38 @@ impl MainScene {
         };
 
         let ctx = Renderer::new(ctx);
-        let ctx = ctx.translate(ctx.to_rel_pos(offset));
+        ctx.subcanbas(ctx.to_rel_rect(AbsoluteRect { pos: offset, size }))
+    }
+
+    fn on_mouse_event(&mut self, ctx: &CanvasRenderingContext2d, pos: Pos, ty: MouseEventType) {
+        let pos = Renderer::new(ctx).to_abs_pos(pos); // dirty...
+        let ctx = self.renderer(ctx);
+        let pos = ctx.to_rel_pos(pos);
+        self.button.on_mouse_event(&ctx, pos, ty);
+        self.movable.on_mouse_event(&ctx, pos, ty);
+    }
+
+    fn render(&mut self, ctx: &CanvasRenderingContext2d) {
+        let canvas = ctx.canvas().unwrap();
+        let width = canvas.width() as f64;
+        let height = canvas.height() as f64;
+        ctx.set_fill_style(&JsValue::from_str("gray"));
+        ctx.fill_rect(0.0, 0.0, width, height);
+
+        let ctx = self.renderer(ctx);
 
         ctx.rect(
-            Rect { pos: Pos::ZERO, size: ctx.to_rel_size(size) },
+            Rect {
+                pos: Pos::ZERO,
+                size: Size { w: Percent::new(100.0), h: Percent::new(100.0) },
+            },
             Cow::from("white"),
             Cow::from("green"),
         );
 
         self.i += 1;
 
-        // debug
+        // framecount for debug
         LtoR {
             base: Pos::ZERO,
             components: vecbox![Text {
@@ -255,6 +286,7 @@ impl MainScene {
         }
         .draw(&ctx);
         self.button.draw(&ctx);
+        self.movable.draw(&ctx);
     }
 }
 
@@ -263,27 +295,66 @@ macro_rules! vecbox {
 }
 use vecbox;
 
-struct Renderer<'a> {
-    // ctx.translate だと subcanvas の subcanvas がむずそうなのでやめた
+struct Renderer {
+    // ctx.translate だと translate の translate がむずそうなのでやめた
     offset: AbsolutePos,
-    /// キャンバス全体のサイズ
+    /// レンダラ全体のサイズ
     size: AbsoluteSize,
-    /// このキャンバスのサイズ
-    this_size: AbsoluteSize,
-    ctx: &'a CanvasRenderingContext2d,
+    /// キャンバス全体のサイズ
+    canvas_size: AbsoluteSize,
+    ctx: CanvasRenderingContext2d,
 }
 
-impl<'a> Renderer<'a> {
-    fn new(ctx: &'a CanvasRenderingContext2d) -> Self {
+#[derive(Debug, Clone, Copy)]
+enum CursorState {
+    Normal,
+    Grab,
+    Grabbing,
+}
+impl CursorState {
+    fn to_css(self) -> &'static str {
+        match self {
+            CursorState::Normal => "default",
+            CursorState::Grab => "grab",
+            CursorState::Grabbing => "grabbing",
+        }
+    }
+}
+
+fn change_cursor_state(s: CursorState) {
+    let el = document().get_element_by_id("main").unwrap();
+    let el: HtmlElement = el.dyn_into().unwrap();
+    el.style().set_property("cursor", s.to_css()).unwrap();
+}
+
+struct CanvasStateGuard {
+    ctx: CanvasRenderingContext2d,
+}
+impl CanvasStateGuard {
+    fn new(ctx: &CanvasRenderingContext2d) -> Self {
+        let ctx = ctx.clone();
+        ctx.save();
+        Self { ctx }
+    }
+}
+impl Drop for CanvasStateGuard {
+    fn drop(&mut self) {
+        self.ctx.restore();
+    }
+}
+
+impl Renderer {
+    fn new(ctx: &CanvasRenderingContext2d) -> Self {
         let canvas = ctx.canvas().unwrap();
         let size = AbsoluteSize {
             w: canvas.width() as f64,
             h: canvas.height() as f64,
         };
+        let ctx = ctx.clone();
         Self {
             offset: AbsolutePos::ZERO,
             size,
-            this_size: size,
+            canvas_size: size,
             ctx,
         }
     }
@@ -296,14 +367,20 @@ impl<'a> Renderer<'a> {
     }
     fn to_rel_pos(&self, abs: AbsolutePos) -> Pos {
         Pos {
-            x: Percent::from_absolute(abs.x, self.size.w),
-            y: Percent::from_absolute(abs.y, self.size.h),
+            x: Percent::from_absolute(abs.x - self.offset.x, self.size.w),
+            y: Percent::from_absolute(abs.y - self.offset.y, self.size.h),
+        }
+    }
+    fn to_rel_rect(&self, abs: AbsoluteRect) -> Rect {
+        Rect {
+            pos: self.to_rel_pos(abs.pos),
+            size: self.to_rel_size(abs.size),
         }
     }
     fn to_abs_pos(&self, rel: Pos) -> AbsolutePos {
         AbsolutePos {
-            x: rel.x.to_absolute(self.size.w),
-            y: rel.y.to_absolute(self.size.h),
+            x: rel.x.to_absolute(self.size.w) + self.offset.x,
+            y: rel.y.to_absolute(self.size.h) + self.offset.y,
         }
     }
     fn to_abs_size(&self, rel: Size) -> AbsoluteSize {
@@ -321,11 +398,45 @@ impl<'a> Renderer<'a> {
 
     fn translate(&self, pos: Pos) -> Self {
         let pos = self.to_abs_pos(pos);
-        Self {
-            offset: self.offset + pos,
-            this_size: self.this_size - pos,
+        let me = Self {
+            offset: pos,
             size: self.size,
-            ctx: self.ctx,
+            canvas_size: self.canvas_size,
+            ctx: self.ctx.clone(),
+        };
+
+        let translate_debug = false;
+        if translate_debug {
+            me.rect(
+                Rect {
+                    pos: Pos::ZERO,
+                    size: Size { w: Percent::new(100.0), h: Percent::new(100.0) },
+                },
+                None,
+                Cow::from("blue"),
+            );
+            me.line(
+                Percent::new(0.2),
+                Pos::new(0.0, 50.0),
+                Pos::new(100.0, 50.0),
+            );
+            me.line(
+                Percent::new(0.2),
+                Pos::new(50.0, 0.0),
+                Pos::new(50.0, 100.0),
+            );
+        }
+
+        me
+    }
+
+    fn subcanbas(&self, rect: Rect) -> Self {
+        let rect = self.to_abs_rect(rect);
+        Self {
+            offset: self.offset + rect.pos,
+            size: rect.size,
+            canvas_size: self.canvas_size,
+            ctx: self.ctx.clone(),
         }
     }
 
@@ -335,6 +446,19 @@ impl<'a> Renderer<'a> {
 
     fn set_font_size(&self, size: Percent) {
         self.set_font_size_abs(size.to_absolute(self.size.h));
+    }
+
+    fn set_line_width(&self, width: Percent) {
+        self.ctx.set_line_width(width.to_absolute(self.size.w));
+    }
+
+    fn dotted_line(&self) -> CanvasStateGuard {
+        let guard = CanvasStateGuard::new(&self.ctx);
+        let value = Percent::new(0.7).to_absolute(self.size.w);
+        let value = JsValue::from_f64(value);
+        let array = js_sys::Array::of2(&value, &value);
+        self.ctx.set_line_dash(&array).unwrap();
+        guard
     }
 
     fn set_font_to_fit(&self, text: &str, width: Percent) {
@@ -367,9 +491,7 @@ impl<'a> Renderer<'a> {
         if let Some(s) = fill_style.into() {
             self.ctx.set_fill_style(&JsValue::from_str(&s));
         }
-        self.ctx
-            .fill_text(text, self.offset.x + pos.x, self.offset.y + pos.y)
-            .unwrap();
+        self.ctx.fill_text(text, pos.x, pos.y).unwrap();
     }
 
     fn rect(
@@ -378,8 +500,7 @@ impl<'a> Renderer<'a> {
         fill_style: impl Into<Option<Cow<'static, str>>>,
         stroke_style: impl Into<Option<Cow<'static, str>>>,
     ) {
-        let mut rect = self.to_abs_rect(rect);
-        rect.pos += self.offset;
+        let rect = self.to_abs_rect(rect);
 
         let fill_style = fill_style.into();
         let stroke_style = stroke_style.into();
@@ -400,7 +521,7 @@ impl<'a> Renderer<'a> {
         let a = self.to_abs_pos(a);
         let b = self.to_abs_pos(b);
 
-        self.ctx.set_line_width(width.to_absolute(self.size.h));
+        self.set_line_width(width);
         self.ctx.begin_path();
         self.ctx.move_to(a.x, a.y);
         self.ctx.line_to(b.x, b.y);
@@ -409,11 +530,12 @@ impl<'a> Renderer<'a> {
 }
 
 trait Drawable: 'static {
-    fn draw(&self, ctx: &Renderer<'_>);
-    fn size(&self, ctx: &Renderer<'_>) -> Size;
+    fn draw(&self, ctx: &Renderer);
+    fn size(&self, ctx: &Renderer) -> Size;
 
-    /// クリックハンドラ。実際に自分がクリックされたかどうか、呼び出し元は関知しない。
-    fn on_click(&mut self, _pos: Pos) {}
+    /// pos が自分の描画範囲に含まれているかを返す
+    fn contains(&self, ctx: &Renderer, pos: Pos) -> bool;
+    fn on_mouse_event(&mut self, _ctx: &Renderer, _pos: Pos, _ty: MouseEventType) {}
 }
 
 #[derive(Debug, Clone, Copy, derive_more::Add, derive_more::AddAssign)]
@@ -452,6 +574,7 @@ struct AbsoluteRect {
     derive_more::Add,
     derive_more::AddAssign,
     derive_more::Sub,
+    derive_more::SubAssign,
 )]
 struct Percent(NotNan<f64>);
 impl Percent {
@@ -471,7 +594,15 @@ impl Percent {
 }
 
 /// 左上が 0, 0 右下が 1, 1
-#[derive(Debug, Clone, Copy)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    derive_more::Add,
+    derive_more::AddAssign,
+    derive_more::Sub,
+    derive_more::SubAssign,
+)]
 struct Pos {
     x: Percent,
     y: Percent,
@@ -516,11 +647,12 @@ impl Rect {
 
 struct LtoR {
     base: Pos,
+    /// 各 component は pos=0,0 に描画すること
     components: Vec<Box<dyn Drawable>>,
 }
 
 impl Drawable for LtoR {
-    fn size(&self, ctx: &Renderer<'_>) -> Size {
+    fn size(&self, ctx: &Renderer) -> Size {
         let mut w = Percent::ZERO;
         let mut h = Percent::ZERO;
 
@@ -533,12 +665,102 @@ impl Drawable for LtoR {
         Size { w, h }
     }
 
-    fn draw(&self, ctx: &Renderer<'_>) {
+    fn draw(&self, ctx: &Renderer) {
         let mut pos = self.base;
         for d in &self.components {
             d.draw(&ctx.translate(pos));
             pos.x += d.size(ctx).w;
         }
+    }
+
+    fn contains(&self, ctx: &Renderer, pos: Pos) -> bool {
+        Rect { pos: self.base, size: self.size(ctx) }.contains(pos)
+    }
+}
+
+struct MovableEntry {
+    base: Pos,
+    component: Box<dyn Drawable>,
+    selected: Option<Dragging>,
+}
+
+struct Dragging {
+    old_base: Pos,
+    holding_from: Pos,
+}
+
+impl MovableEntry {
+    fn new(c: impl Drawable, base: Pos) -> Self {
+        Self { base, component: Box::new(c), selected: None }
+    }
+}
+
+struct Movable {
+    /// component の onclick は呼ばれない
+    /// 各 component は 0,0 に描画すること
+    entries: Vec<MovableEntry>,
+}
+impl Drawable for Movable {
+    fn on_mouse_event(&mut self, ctx: &Renderer, pos: Pos, ty: MouseEventType) {
+        let overlap = self.entries.iter_mut().find(|x| {
+            let pos = ctx.to_abs_pos(pos);
+            let ctx = ctx.translate(x.base);
+            let pos = ctx.to_rel_pos(pos);
+            x.component.contains(&ctx, pos)
+        });
+
+        match ty {
+            MouseEventType::Down => {
+                tracing::info!("{pos:?} {ty:?}");
+                if let Some(entry) = overlap {
+                    change_cursor_state(CursorState::Grabbing);
+
+                    entry.selected = Some(Dragging { old_base: entry.base, holding_from: pos });
+                }
+            }
+            MouseEventType::Move => {
+                change_cursor_state(if overlap.is_some() {
+                    CursorState::Grab
+                } else {
+                    CursorState::Normal
+                });
+
+                if let Some(entry) = self.entries.iter_mut().find(|x| x.selected.is_some()) {
+                    change_cursor_state(CursorState::Grabbing);
+
+                    let dragging = entry.selected.as_ref().unwrap();
+                    entry.base = dragging.old_base - dragging.holding_from + pos;
+                }
+            }
+            MouseEventType::Up => {
+                if let Some(entry) = self.entries.iter_mut().find(|x| x.selected.is_some()) {
+                    change_cursor_state(CursorState::Grab);
+                    entry.selected = None;
+                }
+            }
+            MouseEventType::Click => {}
+        }
+    }
+
+    fn draw(&self, ctx: &Renderer) {
+        for entry in &self.entries {
+            entry.component.draw(&ctx.translate(entry.base));
+
+            if entry.selected.is_some() {
+                let size = entry.component.size(ctx);
+                let _restore = ctx.dotted_line();
+                ctx.set_line_width(Percent::new(0.14));
+                ctx.rect(Rect { pos: entry.base, size }, None, Cow::from("black"));
+            }
+        }
+    }
+
+    fn size(&self, _ctx: &Renderer) -> Size {
+        unimplemented!()
+    }
+
+    fn contains(&self, _ctx: &Renderer, _pos: Pos) -> bool {
+        unimplemented!()
     }
 }
 
@@ -557,14 +779,18 @@ struct Text {
 }
 
 impl Drawable for Text {
-    fn size(&self, ctx: &Renderer<'_>) -> Size {
+    fn size(&self, ctx: &Renderer) -> Size {
         ctx.measure_text(&self.text)
     }
 
-    fn draw(&self, ctx: &Renderer<'_>) {
+    fn draw(&self, ctx: &Renderer) {
         ctx.set_text_align(self.align);
         ctx.set_font_size(self.size);
         ctx.filled_text(&self.text, self.pos, Cow::from("black"));
+    }
+
+    fn contains(&self, ctx: &Renderer, pos: Pos) -> bool {
+        Rect { pos: self.pos, size: self.size(ctx) }.contains(pos)
     }
 }
 
@@ -575,17 +801,19 @@ struct Button {
 }
 
 impl Drawable for Button {
-    fn on_click(&mut self, pos: Pos) {
-        if self.rect.contains(pos) {
-            self.on = !self.on;
+    fn on_mouse_event(&mut self, _ctx: &Renderer, pos: Pos, ty: MouseEventType) {
+        if let MouseEventType::Click = ty {
+            if self.rect.contains(pos) {
+                self.on = !self.on;
+            }
         }
     }
 
-    fn size(&self, _ctx: &Renderer<'_>) -> Size {
+    fn size(&self, _ctx: &Renderer) -> Size {
         self.rect.size
     }
 
-    fn draw(&self, ctx: &Renderer<'_>) {
+    fn draw(&self, ctx: &Renderer) {
         ctx.rect(
             self.rect,
             None,
@@ -594,5 +822,33 @@ impl Drawable for Button {
         ctx.set_text_align(TextAlign::Center);
         ctx.set_font_to_fit(&self.text, self.rect.size.w - Percent::new(2.0));
         ctx.filled_text(&self.text, self.rect.center(), Cow::from("black"));
+    }
+
+    fn contains(&self, _ctx: &Renderer, pos: Pos) -> bool {
+        self.rect.contains(pos)
+    }
+}
+
+struct DrawableRect {
+    rect: Rect,
+}
+
+impl Drawable for DrawableRect {
+    fn draw(&self, ctx: &Renderer) {
+        ctx.rect(self.rect, None, Cow::from("black"));
+        let text = "動かしてみてね";
+        ctx.set_font_to_fit(text, self.rect.size.w - Percent::new(2.0));
+        ctx.set_text_align(TextAlign::Center);
+        ctx.filled_text(text, self.rect.center(), None)
+    }
+
+    fn size(&self, _ctx: &Renderer) -> Size {
+        self.rect.size
+    }
+
+    fn contains(&self, _ctx: &Renderer, pos: Pos) -> bool {
+        let c = self.rect.contains(pos);
+        tracing::info!(?self.rect, ?pos, ?c);
+        c
     }
 }
