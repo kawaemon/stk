@@ -16,7 +16,7 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::wasm_bindgen::closure::Closure;
 use web_sys::wasm_bindgen::JsCast;
 use web_sys::{
-    CanvasRenderingContext2d, Element, HtmlCanvasElement, MouseEvent, ResizeObserverEntry,
+    CanvasRenderingContext2d, Element, Event, HtmlCanvasElement, MouseEvent, ResizeObserverEntry,
 };
 
 fn main() {
@@ -100,60 +100,96 @@ async fn run() {
     let canvas = document().get_element_by_id("main").unwrap();
     let canvas: HtmlCanvasElement = canvas.dyn_into().unwrap();
 
-    let mut app = App::new();
+    RenderLoop::new(canvas).run().await;
+}
 
-    let _ev = EventListener::new(&canvas, "click", {
-        let canvas = canvas.clone();
-        move |event| {
-            let rect = canvas.get_bounding_client_rect();
+struct RenderLoop {
+    app: Rc<RefCell<App>>,
+    _resize_observer: ResizeObserver,
+    _click_event: EventListener,
+    _mousemove_event: EventListener,
+}
 
-            let event: &MouseEvent = event.dyn_ref().unwrap();
-            let x = event.client_x() as f64 - rect.left();
-            let y = event.client_y() as f64 - rect.top();
+impl RenderLoop {
+    fn new(canvas: HtmlCanvasElement) -> Self {
+        let app = Rc::new(RefCell::new(App { canvas, main_scene: MainScene::new() }));
 
-            tracing::info!("click: {x} {y}");
+        let _resize_observer = ResizeObserver::new({
+            let app = Rc::clone(&app);
+            move |_entries| app.borrow_mut().on_resize()
+        });
+        _resize_observer.observe(&app.borrow().canvas);
+
+        let _click_event = EventListener::new(&app.borrow().canvas, "click", {
+            let app = Rc::clone(&app);
+            move |event| app.borrow_mut().on_click(event)
+        });
+
+        let _mousemove_event = EventListener::new(&app.borrow().canvas, "mousemove", {
+            let app = Rc::clone(&app);
+            move |event| app.borrow_mut().on_mousemove(event)
+        });
+
+        Self {
+            app,
+            _resize_observer,
+            _click_event,
+            _mousemove_event,
         }
-    });
+    }
 
-    let _ev = EventListener::new(&canvas, "mousemove", {
-        let canvas = canvas.clone();
-        move |event| {
-            let rect = canvas.get_bounding_client_rect();
-
-            let event: &MouseEvent = event.dyn_ref().unwrap();
-            let x = event.client_x() as f64 - rect.left();
-            let y = event.client_y() as f64 - rect.top();
-
-            tracing::info!("move: {x} {y}");
+    async fn run(&mut self) {
+        let ctx = self.app.borrow().canvas.get_context("2d").unwrap().unwrap();
+        let ctx: CanvasRenderingContext2d = ctx.dyn_into().unwrap();
+        loop {
+            self.app.borrow_mut().render(&ctx);
+            RequestAnimationFrameFuture::new().await;
         }
-    });
-
-    let resize_observer = ResizeObserver::new({
-        let canvas = canvas.clone();
-        move |_entries| {
-            let w = canvas.client_width() as u32;
-            let h = canvas.client_height() as u32;
-            canvas.set_width(w);
-            canvas.set_height(h);
-            tracing::info!("canvas resized to {w}x{h}");
-        }
-    });
-    resize_observer.observe(&canvas);
-
-    let ctx = canvas.get_context("2d").unwrap().unwrap();
-    let ctx: CanvasRenderingContext2d = ctx.dyn_into().unwrap();
-
-    loop {
-        app.render(&ctx);
-        RequestAnimationFrameFuture::new().await;
     }
 }
 
 struct App {
-    i: usize,
+    canvas: HtmlCanvasElement,
+    main_scene: MainScene,
 }
 
 impl App {
+    fn on_resize(&self) {
+        let w = self.canvas.client_width() as u32;
+        let h = self.canvas.client_height() as u32;
+        self.canvas.set_width(w);
+        self.canvas.set_height(h);
+        tracing::info!("canvas resized to {w}x{h}");
+    }
+
+    fn mouse_event_to_pos(&self, m: &Event) -> AbsolutePos {
+        let rect = self.canvas.get_bounding_client_rect();
+        let event: &MouseEvent = m.dyn_ref().unwrap();
+        let x = event.client_x() as f64 - rect.left();
+        let y = event.client_y() as f64 - rect.top();
+        AbsolutePos { x, y }
+    }
+
+    fn on_click(&self, event: &Event) {
+        let pos = self.mouse_event_to_pos(event);
+        tracing::info!("click: {}x{}", pos.x, pos.y);
+    }
+
+    fn on_mousemove(&self, event: &Event) {
+        let pos = self.mouse_event_to_pos(event);
+        tracing::info!("move: {}x{}", pos.x, pos.y);
+    }
+
+    fn render(&mut self, ctx: &CanvasRenderingContext2d) {
+        self.main_scene.render(ctx);
+    }
+}
+
+struct MainScene {
+    i: usize,
+}
+
+impl MainScene {
     fn new() -> Self {
         Self { i: 0 }
     }
