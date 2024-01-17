@@ -6,14 +6,15 @@ use swc_core::common::sync::Lrc;
 use swc_core::common::{FileName, SourceMap, DUMMY_SP};
 use swc_core::ecma::ast::{
     ArrowExpr, BindingIdent, BlockStmt, BlockStmtOrExpr, CallExpr, Decl, EsVersion, Expr,
-    ExprOrSpread, FnDecl, FnExpr, Function, Ident, Lit, Module, ModuleItem, Param, Pat, Program,
-    RestPat, ReturnStmt, Stmt, Str, VarDecl, VarDeclKind, VarDeclarator,
+    ExprOrSpread, ExprStmt, FnDecl, FnExpr, Function, Ident, Lit, Module, ModuleItem, Param,
+    ParenExpr, Pat, Program, RestPat, ReturnStmt, Stmt, Str, VarDecl, VarDeclKind, VarDeclarator,
 };
 use swc_core::ecma::atoms::JsWord;
 use swc_core::ecma::codegen::text_writer::JsWriter;
 use swc_core::ecma::codegen::Emitter;
 use swc_core::ecma::parser::lexer::Lexer;
 use swc_core::ecma::parser::Parser;
+use swc_core::ecma::visit::fields::BlockStmtOrExprField;
 use swc_core::ecma::visit::{as_folder, FoldWith, Visit, VisitMut, VisitMutWith, VisitWith};
 
 pub fn optimize_js(js: impl Into<String>) -> String {
@@ -44,7 +45,7 @@ pub fn optimize_js(js: impl Into<String>) -> String {
     String::from_utf8(buf).unwrap()
 }
 
-fn map_function(mut f: Function) -> Option<ArrowExpr> {
+fn function_to_arrow(mut f: Function) -> Option<ArrowExpr> {
     // replace `arguments` special identifier to rest parameter
     // from: function() { d(arguments); }
     // to  : function(...a) { d(a); }
@@ -77,7 +78,8 @@ fn map_function(mut f: Function) -> Option<ArrowExpr> {
         .into_iter()
         .map(|x| x.decorators.is_empty().then_some(x.pat))
         .collect::<Option<Vec<_>>>()?;
-    let mut arrow = ArrowExpr {
+
+    let arrow = ArrowExpr {
         span: f.span,
         params,
         body: Box::new(BlockStmtOrExpr::BlockStmt(f.body.unwrap())),
@@ -87,22 +89,39 @@ fn map_function(mut f: Function) -> Option<ArrowExpr> {
         return_type: f.return_type,
     };
 
-    // from: () => { const arg_ident = init; return arg_ident; }
-    // to  : () => init;
-    // if let Some(BlockStmt { stmts: body, .. }) = &mut f.body
-    if let BlockStmtOrExpr::BlockStmt(BlockStmt { stmts: body, .. }) = &mut *arrow.body
+    Some(arrow)
+}
+
+fn optimize_arrow(arrow: &mut ArrowExpr) {
+    // from: () => { const arg_ident = init; return foo(arg_ident); }
+    // to  : () => foo(init);
+    if let BlockStmtOrExpr::BlockStmt(BlockStmt { stmts: body, span: _ }) = &mut *arrow.body
         && let [may_decl, may_ret] = &mut body[..]
         && let Stmt::Decl(Decl::Var(box VarDecl { kind: VarDeclKind::Const, declare: false, decls, span: _  })) = may_decl
         && let [VarDeclarator { name: Pat::Ident(BindingIdent { id: ref decl_name, type_ann: None }), init: Some(ref init), definite: false, .. }] = decls[..]
-        && let Stmt::Return(ReturnStmt { arg: Some(box Expr::Call(CallExpr { args, type_args: None, .. })), .. }) = may_ret
-        && let [ExprOrSpread { expr: box ref mut arg, .. }] = args[..]
+        && let Stmt::Return(ReturnStmt { arg: Some(box Expr::Call(CallExpr { callee, args, type_args: None, .. })), .. }) = may_ret
+        && let [ExprOrSpread { expr: box ref mut arg, spread: None }] = args[..]
         && let Expr::Ident(arg_ident) = arg
         && arg_ident.sym == decl_name.sym
     {
-        arrow.body = Box::new(BlockStmtOrExpr::Expr(init.clone()));
+        arrow.body = Box::new(BlockStmtOrExpr::Expr(Box::new(Expr::Call(CallExpr {
+            span: DUMMY_SP,
+            callee: callee.clone(),
+            args: vec![ExprOrSpread { expr: init.clone(), spread: None }],
+            type_args: None
+        }))));
     }
 
-    Some(arrow)
+    // from: () => { console.log() }
+    // to  : () => console.log()
+    if let BlockStmtOrExpr::BlockStmt(BlockStmt { stmts: body, span: _ }) = &mut *arrow.body
+        && let [Stmt::Expr(ExprStmt { expr, span: _ })] = &mut body[..]
+    {
+        arrow.body = Box::new(BlockStmtOrExpr::Expr(Box::new(Expr::Paren(ParenExpr {
+            span: DUMMY_SP,
+            expr: expr.clone()
+        }))));
+    };
 }
 
 pub struct FunctionToArrowFn;
@@ -110,16 +129,17 @@ pub struct FunctionToArrowFn;
 impl VisitMut for FunctionToArrowFn {
     fn visit_mut_expr(&mut self, n: &mut Expr) {
         n.visit_mut_children_with(self);
-        let Expr::Fn(f) = n else { return };
 
-        if f.ident.is_some() {
-            return;
+        if let Expr::Fn(f) = n
+            && f.ident.is_none()
+            && let Some(arrow_fn) = function_to_arrow(*f.function.clone())
+        {
+           *n = Expr::Arrow(arrow_fn);
         }
 
-        let Some(arrow_fn) = map_function(*f.function.clone()) else {
-            return;
-        };
-        *n = Expr::Arrow(arrow_fn);
+        if let Expr::Arrow(ref mut expr) = n {
+            optimize_arrow(expr);
+        }
     }
 
     fn visit_mut_decl(&mut self, n: &mut Decl) {
@@ -127,7 +147,7 @@ impl VisitMut for FunctionToArrowFn {
 
         let Decl::Fn(f) = n else { return };
 
-        let Some(arrow_fn) = map_function(*f.function.clone()) else {
+        let Some(arrow_fn) = function_to_arrow(*f.function.clone()) else {
             return;
         };
 
