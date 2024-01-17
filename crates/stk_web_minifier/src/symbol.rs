@@ -1,91 +1,7 @@
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 
-use stk_macro::struct_map;
 use wasm_encoder::{ConstExpr, ElementSegment};
 
-macro_rules! enum_map {
-    () => {};
-    (fn $fn_name:ident($ty:ident) { $($tt:tt)* } $($tail:tt)*) => {
-        fn $fn_name(a: wasmparser::$ty) -> wasm_encoder::$ty {
-            enum_map!(@arm [a $ty $ty] $($tt)*);
-            unreachable!();
-        }
-        enum_map!($($tail)*);
-    };
-    (fn $fn_name:ident($from_ty:ident) -> $to_ty:ident { $($tt:tt)* } $($tail:tt)*) => {
-        fn $fn_name(a: wasmparser::$from_ty) -> wasm_encoder::$to_ty {
-            enum_map!(@arm [a $from_ty $to_ty] $($tt)*);
-            unreachable!();
-        }
-        enum_map!($($tail)*);
-    };
-
-    (@arm [$var:ident $from_ty:ident $to_ty:ident]) => {};
-    (@arm [$var:ident $from_ty:ident $to_ty:ident] $name:ident$(($($params:ident),*$(,)?))? => $block:block, $($tail:tt)*) => {
-        if let wasmparser::$from_ty::$name$(($($params)*))? = $var {
-            return $block;
-        }
-        enum_map!(@arm [$var $from_ty $to_ty] $($tail)*);
-    };
-    (@arm [$var:ident $from_ty:ident $to_ty:ident] $name:ident$(($($params:ident),*$(,)?))?, $($tail:tt)*) => {
-        #[allow(irrefutable_let_patterns)]
-        if let wasmparser::$from_ty::$name$(($($params)*))? = $var {
-            return wasm_encoder::$to_ty::$name$(($($params)*))?;
-        }
-        enum_map!(@arm [$var $from_ty $to_ty] $($tail)*);
-    };
-}
-
-enum_map! {
-    fn map_heap_type(HeapType) {
-        Func, Extern, Any, None, NoExtern, NoFunc, Eq, Struct, Array, I31, Indexed(i),
-    }
-
-    fn map_val_type(ValType) {
-        I32, I64, F32, F64, V128, Ref(ref_) => {
-            wasm_encoder::ValType::Ref(map_ref_type(ref_))
-        },
-    }
-    fn map_storage_type(StorageType) {
-        I8, I16, Val(val) => {
-            wasm_encoder::StorageType::Val(map_val_type(val))
-        },
-    }
-    fn map_tag_kind(TagKind) {
-        Exception,
-    }
-    fn map_external_kind(ExternalKind) -> ExportKind {
-        Func, Table, Memory, Global, Tag,
-    }
-}
-struct_map! {
-    fn map_table_type(t: TableType) {
-        element_type: { map_ref_type(t.element_type) },
-        minimum: initial,
-        maximum,
-    }
-    fn map_memory_type(m: MemoryType) {
-        minimum: initial,
-        maximum, memory64, shared,
-    }
-    fn map_global_type(g: GlobalType) {
-        val_type: { map_val_type(g.content_type) },
-        mutable,
-    }
-    fn map_tag_type(t: TagType) {
-        kind: { map_tag_kind(t.kind) },
-        func_type_idx,
-    }
-}
-
-fn map_const_expr(c: wasmparser::ConstExpr) -> wasm_encoder::ConstExpr {
-    let mut reader = c.get_binary_reader();
-    // wasm_encoder::ConstExpr appends Instruction::End at last
-    let bytes = reader.read_bytes(reader.bytes_remaining() - 1).unwrap();
-    wasm_encoder::ConstExpr::raw(bytes.iter().copied())
-}
 fn map_element_items<'a>(
     items: wasmparser::ElementItems,
     functions: &'a mut Vec<u32>,
@@ -96,9 +12,9 @@ fn map_element_items<'a>(
             functions.extend(f.into_iter().map(|x| x.unwrap()));
             wasm_encoder::Elements::Functions(functions)
         }
-        wasmparser::ElementItems::Expressions(e) => {
-            const_exprs.extend(e.into_iter().map(|x| map_const_expr(x.unwrap())));
-            wasm_encoder::Elements::Expressions(const_exprs)
+        wasmparser::ElementItems::Expressions(ref_, e) => {
+            const_exprs.extend(e.into_iter().map(|x| x.unwrap().try_into().unwrap()));
+            wasm_encoder::Elements::Expressions(ref_.try_into().unwrap(), const_exprs)
         }
     }
 }
@@ -112,18 +28,12 @@ fn map_element_kind<'a>(
             wasm_encoder::ElementMode::Active {
                 table: table_index,
                 offset: {
-                    offset.replace(map_const_expr(offset_expr));
+                    offset.replace(offset_expr.try_into().unwrap());
                     offset.as_ref().unwrap()
                 },
             }
         }
         wasmparser::ElementKind::Declared => wasm_encoder::ElementMode::Declared,
-    }
-}
-fn map_ref_type(ref_: wasmparser::RefType) -> wasm_encoder::RefType {
-    wasm_encoder::RefType {
-        nullable: ref_.is_nullable(),
-        heap_type: map_heap_type(ref_.heap_type()),
     }
 }
 
@@ -147,15 +57,15 @@ pub async fn minify_symbol(wasm: &mut Vec<u8>, js: &mut Vec<u8>) {
             wasmparser::Payload::TypeSection(section) => {
                 let mut encoder = wasm_encoder::TypeSection::new();
                 for ty in section {
-                    match ty.unwrap() {
-                        wasmparser::Type::Func(f) => encoder.function(
-                            f.params().iter().copied().map(map_val_type),
-                            f.results().iter().copied().map(map_val_type),
-                        ),
-                        wasmparser::Type::Array(a) => {
-                            encoder.array(map_storage_type(a.element_type), a.mutable)
-                        }
-                    };
+                    let ty = ty.unwrap();
+                    let types = ty.types().iter().cloned().map(|x| x.try_into().unwrap());
+                    if ty.is_explicit_rec_group() {
+                        encoder.rec(types);
+                    } else {
+                        let types = types.collect::<Vec<_>>();
+                        assert_eq!(types.len(), 1);
+                        encoder.subtype(&types[0]);
+                    }
                 }
                 module.section(&encoder);
             }
@@ -169,25 +79,8 @@ pub async fn minify_symbol(wasm: &mut Vec<u8>, js: &mut Vec<u8>) {
                     let name = name_map
                         .entry(import.name)
                         .or_insert_with(|| name_ident.next().unwrap());
-                    encoder.import(
-                        module_name,
-                        name,
-                        match import.ty {
-                            wasmparser::TypeRef::Func(f) => wasm_encoder::EntityType::Function(f),
-                            wasmparser::TypeRef::Table(t) => {
-                                wasm_encoder::EntityType::Table(map_table_type(t))
-                            }
-                            wasmparser::TypeRef::Memory(m) => {
-                                wasm_encoder::EntityType::Memory(map_memory_type(m))
-                            }
-                            wasmparser::TypeRef::Global(g) => {
-                                wasm_encoder::EntityType::Global(map_global_type(g))
-                            }
-                            wasmparser::TypeRef::Tag(t) => {
-                                wasm_encoder::EntityType::Tag(map_tag_type(t))
-                            }
-                        },
-                    );
+                    let ty: wasm_encoder::EntityType = import.ty.try_into().unwrap();
+                    encoder.import(module_name, name, ty);
                 }
                 module.section(&encoder);
             }
@@ -201,21 +94,30 @@ pub async fn minify_symbol(wasm: &mut Vec<u8>, js: &mut Vec<u8>) {
             wasmparser::Payload::TableSection(section) => {
                 let mut encoder = wasm_encoder::TableSection::new();
                 for table in section {
-                    encoder.table(map_table_type(table.unwrap().ty));
+                    let table = table.unwrap();
+                    let ty = table.ty.try_into().unwrap();
+                    match table.init {
+                        wasmparser::TableInit::RefNull => {
+                            encoder.table(ty);
+                        }
+                        wasmparser::TableInit::Expr(exp) => {
+                            encoder.table_with_init(ty, &exp.try_into().unwrap());
+                        }
+                    }
                 }
                 module.section(&encoder);
             }
             wasmparser::Payload::MemorySection(section) => {
                 let mut encoder = wasm_encoder::MemorySection::new();
                 for memory in section {
-                    encoder.memory(map_memory_type(memory.unwrap()));
+                    encoder.memory(memory.unwrap().try_into().unwrap());
                 }
                 module.section(&encoder);
             }
             wasmparser::Payload::TagSection(section) => {
                 let mut encoder = wasm_encoder::TagSection::new();
                 for tag in section {
-                    encoder.tag(map_tag_type(tag.unwrap()));
+                    encoder.tag(tag.unwrap().try_into().unwrap());
                 }
                 module.section(&encoder);
             }
@@ -224,8 +126,8 @@ pub async fn minify_symbol(wasm: &mut Vec<u8>, js: &mut Vec<u8>) {
                 for global in section {
                     let global = global.unwrap();
                     encoder.global(
-                        map_global_type(global.ty),
-                        &map_const_expr(global.init_expr),
+                        global.ty.try_into().unwrap(),
+                        &global.init_expr.try_into().unwrap(),
                     );
                 }
                 module.section(&encoder);
@@ -237,7 +139,7 @@ pub async fn minify_symbol(wasm: &mut Vec<u8>, js: &mut Vec<u8>) {
                     let export_name = exports_ident_map
                         .entry(export.name)
                         .or_insert_with(|| export_ident.next().unwrap());
-                    encoder.export(export_name, map_external_kind(export.kind), export.index);
+                    encoder.export(export_name, export.kind.try_into().unwrap(), export.index);
                 }
                 module.section(&encoder);
             }
@@ -249,7 +151,6 @@ pub async fn minify_symbol(wasm: &mut Vec<u8>, js: &mut Vec<u8>) {
                     let (mut offset, mut functions, mut const_exprs) = (None, vec![], vec![]);
                     let segment = ElementSegment {
                         mode: map_element_kind(element.kind, &mut offset),
-                        element_type: map_ref_type(element.ty),
                         elements: map_element_items(
                             element.items,
                             &mut functions,
@@ -272,7 +173,7 @@ pub async fn minify_symbol(wasm: &mut Vec<u8>, js: &mut Vec<u8>) {
                         wasmparser::DataKind::Active { memory_index, offset_expr } => {
                             encoder.active(
                                 memory_index,
-                                &map_const_expr(offset_expr),
+                                &offset_expr.try_into().unwrap(),
                                 data.data.iter().copied(),
                             );
                         }
