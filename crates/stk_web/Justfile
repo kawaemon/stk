@@ -1,5 +1,5 @@
 release-build:
-    CARGO_PROFILE_RELEASE_OPT_LEVEL=z trunk build --release
+    trunk build --release
     cd ../stk_web_minifier && just
 
 debug-build:

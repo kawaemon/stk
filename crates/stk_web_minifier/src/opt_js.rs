@@ -14,7 +14,6 @@ use swc_core::ecma::codegen::text_writer::JsWriter;
 use swc_core::ecma::codegen::Emitter;
 use swc_core::ecma::parser::lexer::Lexer;
 use swc_core::ecma::parser::Parser;
-use swc_core::ecma::visit::fields::BlockStmtOrExprField;
 use swc_core::ecma::visit::{as_folder, FoldWith, Visit, VisitMut, VisitMutWith, VisitWith};
 
 pub fn optimize_js(js: impl Into<String>) -> String {
