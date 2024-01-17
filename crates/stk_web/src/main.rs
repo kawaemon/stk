@@ -9,6 +9,7 @@ use gloo::events::EventListener;
 use gloo::render::{request_animation_frame, AnimationFrame};
 use gloo::utils::document;
 use js_sys::wasm_bindgen::JsValue;
+use ordered_float::NotNan;
 use tracing_subscriber::fmt::format::Pretty;
 use tracing_subscriber::prelude::*;
 use tracing_web::{performance_layer, MakeWebConsoleWriter};
@@ -112,20 +113,23 @@ struct RenderLoop {
 
 impl RenderLoop {
     fn new(canvas: HtmlCanvasElement) -> Self {
-        let app = Rc::new(RefCell::new(App { canvas, main_scene: MainScene::new() }));
+        let ctx = canvas.get_context("2d").unwrap().unwrap();
+        let ctx: CanvasRenderingContext2d = ctx.dyn_into().unwrap();
+
+        let app = Rc::new(RefCell::new(App { ctx, main_scene: MainScene::new() }));
 
         let _resize_observer = ResizeObserver::new({
             let app = Rc::clone(&app);
             move |_entries| app.borrow_mut().on_resize()
         });
-        _resize_observer.observe(&app.borrow().canvas);
+        _resize_observer.observe(&canvas);
 
-        let _click_event = EventListener::new(&app.borrow().canvas, "click", {
+        let _click_event = EventListener::new(&canvas, "click", {
             let app = Rc::clone(&app);
             move |event| app.borrow_mut().on_click(event)
         });
 
-        let _mousemove_event = EventListener::new(&app.borrow().canvas, "mousemove", {
+        let _mousemove_event = EventListener::new(&canvas, "mousemove", {
             let app = Rc::clone(&app);
             move |event| app.borrow_mut().on_mousemove(event)
         });
@@ -139,77 +143,87 @@ impl RenderLoop {
     }
 
     async fn run(&mut self) {
-        let ctx = self.app.borrow().canvas.get_context("2d").unwrap().unwrap();
-        let ctx: CanvasRenderingContext2d = ctx.dyn_into().unwrap();
         loop {
-            self.app.borrow_mut().render(&ctx);
+            self.app.borrow_mut().render();
             RequestAnimationFrameFuture::new().await;
         }
     }
 }
 
 struct App {
-    canvas: HtmlCanvasElement,
+    ctx: CanvasRenderingContext2d,
     main_scene: MainScene,
 }
 
 impl App {
     fn on_resize(&self) {
-        let w = self.canvas.client_width() as u32;
-        let h = self.canvas.client_height() as u32;
-        self.canvas.set_width(w);
-        self.canvas.set_height(h);
+        let canvas = self.ctx.canvas().unwrap();
+        let w = canvas.client_width() as u32;
+        let h = canvas.client_height() as u32;
+        canvas.set_width(w);
+        canvas.set_height(h);
         tracing::info!("canvas resized to {w}x{h}");
     }
 
     fn mouse_event_to_pos(&self, m: &Event) -> AbsolutePos {
-        let rect = self.canvas.get_bounding_client_rect();
+        let rect = self.ctx.canvas().unwrap().get_bounding_client_rect();
         let event: &MouseEvent = m.dyn_ref().unwrap();
         let x = event.client_x() as f64 - rect.left();
         let y = event.client_y() as f64 - rect.top();
         AbsolutePos { x, y }
     }
 
-    fn on_click(&self, event: &Event) {
+    fn on_click(&mut self, event: &Event) {
         let pos = self.mouse_event_to_pos(event);
-        tracing::info!("click: {}x{}", pos.x, pos.y);
+        // tracing::info!("click: {}x{}", pos.x, pos.y);
+
+        self.main_scene
+            .on_click(Renderer::new(&self.ctx).to_rel_pos(pos));
     }
 
     fn on_mousemove(&self, event: &Event) {
         let pos = self.mouse_event_to_pos(event);
-        tracing::info!("move: {}x{}", pos.x, pos.y);
+        // tracing::info!("move: {}x{}", pos.x, pos.y);
     }
 
-    fn render(&mut self, ctx: &CanvasRenderingContext2d) {
-        self.main_scene.render(ctx);
+    fn render(&mut self) {
+        self.main_scene.render(&self.ctx);
     }
 }
 
 struct MainScene {
     i: usize,
+    button: Button,
 }
 
 impl MainScene {
     fn new() -> Self {
-        Self { i: 0 }
+        Self {
+            i: 0,
+            button: Button {
+                rect: Rect::new(45.0, 45.0, 10.0, 10.0),
+                on: false,
+                text: "テストボタン".into(),
+            },
+        }
     }
 
-    fn on_cursormove(&self, x: f64, y: f64) {}
+    fn on_click(&mut self, pos: Pos) {
+        self.button.on_click(pos);
+    }
 
     fn render(&mut self, ctx: &CanvasRenderingContext2d) {
-        let aspect_ratio = 16.0 / 9.0;
         let canvas = ctx.canvas().unwrap();
         let width = canvas.width() as f64;
         let height = canvas.height() as f64;
 
         ctx.set_fill_style(&JsValue::from_str("gray"));
         ctx.fill_rect(0.0, 0.0, width, height);
-        ctx.set_text_baseline("top");
-        ctx.set_text_align("left");
 
         let (size, offset) = {
-            let a = AbsoluteSize { w: width, h: width / 16.0 * 9.0 };
-            let b = AbsoluteSize { w: height / 9.0 * 16.0, h: height };
+            let (as_w, as_h) = (16.0, 9.0);
+            let a = AbsoluteSize { w: width, h: width / as_w * as_h };
+            let b = AbsoluteSize { w: height / as_h * as_w, h: height };
             let remain_width = a.h < height;
             if remain_width {
                 (a, AbsolutePos { x: 0.0, y: (height - a.h) / 2.0 })
@@ -230,11 +244,17 @@ impl MainScene {
         self.i += 1;
 
         // debug
-        LtoR(vecbox![Text {
-            text: format!("{}", self.i).into(),
-            size: Percent(5.0)
-        },])
-        .render(&ctx.translate(Pos { x: Percent(0.0), y: Percent(0.0) }))
+        LtoR {
+            base: Pos::ZERO,
+            components: vecbox![Text {
+                pos: Pos::ZERO,
+                align: TextAlign::TopLeft,
+                text: format!("{}", self.i).into(),
+                size: Percent::new(5.0)
+            }],
+        }
+        .draw(&ctx);
+        self.button.draw(&ctx);
     }
 }
 
@@ -309,9 +329,29 @@ impl<'a> Renderer<'a> {
         }
     }
 
+    fn set_font_size_abs(&self, size: f64) {
+        self.ctx.set_font(&format!("{size}px sans-serif"));
+    }
+
     fn set_font_size(&self, size: Percent) {
-        self.ctx
-            .set_font(&format!("{}px sans-serif", size.to_absolute(self.size.h)));
+        self.set_font_size_abs(size.to_absolute(self.size.h));
+    }
+
+    fn set_font_to_fit(&self, text: &str, width: Percent) {
+        let width = width.to_absolute(self.size.w);
+
+        self.set_font_size_abs(1.0);
+        let size = self.ctx.measure_text(text).unwrap();
+        self.set_font_size_abs(width / size.width());
+    }
+
+    fn set_text_align(&self, mode: TextAlign) {
+        let (baseline, align) = match mode {
+            TextAlign::TopLeft => ("top", "left"),
+            TextAlign::Center => ("middle", "center"),
+        };
+        self.ctx.set_text_baseline(baseline);
+        self.ctx.set_text_align(align);
     }
 
     fn measure_text(&self, text: &str) -> Size {
@@ -369,8 +409,11 @@ impl<'a> Renderer<'a> {
 }
 
 trait Drawable: 'static {
-    fn measure(&self, ctx: &Renderer<'_>) -> Size;
-    fn render(&self, ctx: &Renderer<'_>);
+    fn draw(&self, ctx: &Renderer<'_>);
+    fn size(&self, ctx: &Renderer<'_>) -> Size;
+
+    /// クリックハンドラ。実際に自分がクリックされたかどうか、呼び出し元は関知しない。
+    fn on_click(&mut self, _pos: Pos) {}
 }
 
 #[derive(Debug, Clone, Copy, derive_more::Add, derive_more::AddAssign)]
@@ -398,14 +441,32 @@ struct AbsoluteRect {
     size: AbsoluteSize,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Percent(f64);
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    derive_more::Add,
+    derive_more::AddAssign,
+    derive_more::Sub,
+)]
+struct Percent(NotNan<f64>);
 impl Percent {
+    const ZERO: Self = Self(unsafe { NotNan::new_unchecked(0.0) });
+    fn new(v: f64) -> Self {
+        Self(NotNan::new(v).unwrap())
+    }
+    fn value(&self) -> f64 {
+        self.0.into_inner()
+    }
     fn from_absolute(value: f64, ref_: f64) -> Self {
-        Self(value / ref_ * 100.0)
+        Self(NotNan::new(value / ref_ * 100.0).unwrap())
     }
     fn to_absolute(self, ref_: f64) -> f64 {
-        self.0 / 100.0 * ref_
+        self.0.into_inner() / 100.0 * ref_
     }
 }
 
@@ -416,77 +477,122 @@ struct Pos {
     y: Percent,
 }
 impl Pos {
-    const ZERO: Self = Pos { x: Percent(0.0), y: Percent(0.0) };
+    const ZERO: Self = Pos { x: Percent::ZERO, y: Percent::ZERO };
+    fn new(x: f64, y: f64) -> Pos {
+        Pos { x: Percent::new(x), y: Percent::new(y) }
+    }
 }
 #[derive(Debug, Clone, Copy)]
 struct Size {
     w: Percent,
     h: Percent,
 }
+impl Size {
+    fn new(w: f64, h: f64) -> Self {
+        Self { w: Percent::new(w), h: Percent::new(h) }
+    }
+}
 #[derive(Debug, Clone, Copy)]
 struct Rect {
     pos: Pos,
     size: Size,
 }
-
-struct LtoR(Vec<Box<dyn Drawable>>);
-
-impl Drawable for LtoR {
-    fn measure(&self, ctx: &Renderer<'_>) -> Size {
-        let mut w = 0.0f64;
-        let mut h = 0.0f64;
-
-        for d in &self.0 {
-            let d = d.measure(ctx);
-            w += d.w.0;
-            h = h.max(d.h.0);
-        }
-
-        Size { w: Percent(w), h: Percent(h) }
+impl Rect {
+    fn new(x: f64, y: f64, w: f64, h: f64) -> Self {
+        Self { pos: Pos::new(x, y), size: Size::new(w, h) }
     }
-
-    fn render(&self, ctx: &Renderer<'_>) {
-        let mut x = 0.0;
-        for d in &self.0 {
-            d.render(&ctx.translate(Pos { x: Percent(x), y: Percent(0.0) }));
-            x += d.measure(ctx).w.0;
+    #[rustfmt::skip]
+    fn contains(&self, pos: Pos) -> bool {
+        self.pos.x < pos.x && pos.x < (self.pos.x + self.size.w) &&
+        self.pos.y < pos.y && pos.y < (self.pos.y + self.size.h)
+    }
+    fn center(&self) -> Pos {
+        Pos {
+            x: self.pos.x + Percent::new(self.size.w.value() / 2.0),
+            y: self.pos.x + Percent::new(self.size.h.value() / 2.0),
         }
     }
 }
 
+struct LtoR {
+    base: Pos,
+    components: Vec<Box<dyn Drawable>>,
+}
+
+impl Drawable for LtoR {
+    fn size(&self, ctx: &Renderer<'_>) -> Size {
+        let mut w = Percent::ZERO;
+        let mut h = Percent::ZERO;
+
+        for d in &self.components {
+            let d = d.size(ctx);
+            w += d.w;
+            h = h.max(d.h);
+        }
+
+        Size { w, h }
+    }
+
+    fn draw(&self, ctx: &Renderer<'_>) {
+        let mut pos = self.base;
+        for d in &self.components {
+            d.draw(&ctx.translate(pos));
+            pos.x += d.size(ctx).w;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TextAlign {
+    TopLeft,
+    Center,
+}
+
 struct Text {
+    pos: Pos,
+    align: TextAlign,
     text: Cow<'static, str>,
     /// 画面の高さ基準。今回はアス比を固定しているので問題ない
     size: Percent,
 }
 
 impl Drawable for Text {
-    fn measure(&self, ctx: &Renderer<'_>) -> Size {
-        ctx.set_font_size(self.size);
+    fn size(&self, ctx: &Renderer<'_>) -> Size {
         ctx.measure_text(&self.text)
     }
 
-    fn render(&self, ctx: &Renderer<'_>) {
+    fn draw(&self, ctx: &Renderer<'_>) {
+        ctx.set_text_align(self.align);
         ctx.set_font_size(self.size);
-        ctx.filled_text(&self.text, Pos::ZERO, Cow::from("black"));
+        ctx.filled_text(&self.text, self.pos, Cow::from("black"));
     }
 }
 
 struct Button {
+    rect: Rect,
     on: bool,
-    size: Size,
+    text: Cow<'static, str>,
 }
 
 impl Drawable for Button {
-    fn measure(&self, _ctx: &Renderer<'_>) -> Size {
-        self.size
+    fn on_click(&mut self, pos: Pos) {
+        if self.rect.contains(pos) {
+            self.on = !self.on;
+        }
     }
 
-    fn render(&self, ctx: &Renderer<'_>) {
+    fn size(&self, _ctx: &Renderer<'_>) -> Size {
+        self.rect.size
+    }
+
+    fn draw(&self, ctx: &Renderer<'_>) {
         ctx.rect(
-            Rect { pos: Pos::ZERO, size: self.size },
-            Cow::from(if self.on { "blue" } else { "red" }),
-            Cow::from("black"),
+            self.rect,
+            None,
+            Cow::from(if self.on { "red" } else { "black" }),
         );
+        ctx.set_text_align(TextAlign::Center);
+        ctx.set_font_to_fit(&self.text, self.rect.size.w - Percent::new(2.0));
+        ctx.filled_text(&self.text, self.rect.center(), Cow::from("black"));
     }
 }
