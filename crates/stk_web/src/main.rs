@@ -204,26 +204,12 @@ impl App {
 
 struct MainScene {
     i: usize,
-    button: Button,
-    movable: Movable,
+    led: Led,
 }
 
 impl MainScene {
     fn new() -> Self {
-        Self {
-            i: 0,
-            button: Button {
-                rect: Rect::new(20.0, 20.0, 10.0, 10.0),
-                on: false,
-                text: "テストボタン".into(),
-            },
-            movable: Movable {
-                entries: vec![MovableEntry::new(
-                    Led { rect: Rect::new(0.0, 0.0, 20.0, 20.0) },
-                    Pos::new(45.0, 45.0),
-                )],
-            },
-        }
+        Self { i: 0, led: Led::new() }
     }
 
     fn renderer(&self, ctx: &CanvasRenderingContext2d) -> Renderer {
@@ -250,8 +236,7 @@ impl MainScene {
         let pos = Renderer::new(ctx).to_abs_pos(pos); // dirty...
         let ctx = self.renderer(ctx);
         let pos = ctx.to_rel_pos(pos);
-        self.button.on_mouse_event(&ctx, pos, ty);
-        self.movable.on_mouse_event(&ctx, pos, ty);
+        self.led.on_mouse_event(&ctx, pos, ty);
     }
 
     fn render(&mut self, ctx: &CanvasRenderingContext2d) {
@@ -275,15 +260,9 @@ impl MainScene {
         }
         .draw(&ctx);
 
-        self.button.draw(&ctx);
-        self.movable.draw(&ctx);
+        self.led.draw(&ctx);
     }
 }
-
-macro_rules! vecbox {
-    ($($el:expr),*$(,)?) => { vec![$(Box::new($el)),*] };
-}
-use vecbox;
 
 struct Renderer {
     // ctx.translate だと translate の translate がむずそうなのでやめた
@@ -585,6 +564,7 @@ struct AbsoluteRect {
 struct Percent(NotNan<f64>);
 impl Percent {
     const ZERO: Self = Self(unsafe { NotNan::new_unchecked(0.0) });
+    const HALF: Self = Self(unsafe { NotNan::new_unchecked(50.0) });
     const FULL: Self = Self(unsafe { NotNan::new_unchecked(100.0) });
     fn new(v: f64) -> Self {
         Self(NotNan::new(v).unwrap())
@@ -616,6 +596,7 @@ struct Pos {
 }
 impl Pos {
     const ZERO: Self = Pos { x: Percent::ZERO, y: Percent::ZERO };
+    const CENTER: Self = Pos { x: Percent::HALF, y: Percent::HALF };
     fn new(x: f64, y: f64) -> Pos {
         Pos { x: Percent::new(x), y: Percent::new(y) }
     }
@@ -702,64 +683,47 @@ impl Drawable for LtoR {
     }
 }
 
-struct MovableEntry {
-    base: Pos,
-    component: Box<dyn Drawable>,
-    selected: Option<Dragging>,
-}
-
 struct Dragging {
     old_base: Pos,
     holding_from: Pos,
 }
 
-impl MovableEntry {
-    fn new(c: impl Drawable, base: Pos) -> Self {
-        Self { base, component: Box::new(c), selected: None }
+struct Movable {
+    rect: Rect,
+    dragging: Option<Dragging>,
+}
+impl Movable {
+    fn new(rect: Rect) -> Self {
+        Self { rect, dragging: None }
     }
 }
-
-struct Movable {
-    /// component の onclick は呼ばれない
-    /// 各 component は 0,0 に描画すること
-    entries: Vec<MovableEntry>,
-}
 impl Drawable for Movable {
-    fn on_mouse_event(&mut self, ctx: &Renderer, pos: Pos, ty: MouseEventType) {
-        let overlap = self.entries.iter_mut().find(|x| {
-            let pos = ctx.to_abs_pos(pos);
-            let ctx = ctx.translate(x.base);
-            let pos = ctx.to_rel_pos(pos);
-            x.component.contains(&ctx, pos)
-        });
-
+    fn on_mouse_event(&mut self, _ctx: &Renderer, pos: Pos, ty: MouseEventType) {
         match ty {
             MouseEventType::Down => {
-                tracing::info!("{pos:?} {ty:?}");
-                if let Some(entry) = overlap {
+                if self.rect.contains(pos) {
                     change_cursor_state(CursorState::Grabbing);
 
-                    entry.selected = Some(Dragging { old_base: entry.base, holding_from: pos });
+                    self.dragging = Some(Dragging { old_base: self.rect.pos, holding_from: pos });
                 }
             }
             MouseEventType::Move => {
-                change_cursor_state(if overlap.is_some() {
+                change_cursor_state(if self.dragging.is_some() {
                     CursorState::Grab
                 } else {
                     CursorState::Normal
                 });
 
-                if let Some(entry) = self.entries.iter_mut().find(|x| x.selected.is_some()) {
+                if let Some(dragging) = self.dragging.as_ref() {
                     change_cursor_state(CursorState::Grabbing);
 
-                    let dragging = entry.selected.as_ref().unwrap();
-                    entry.base = dragging.old_base - dragging.holding_from + pos;
+                    self.rect.pos = dragging.old_base - dragging.holding_from + pos;
                 }
             }
             MouseEventType::Up => {
-                if let Some(entry) = self.entries.iter_mut().find(|x| x.selected.is_some()) {
+                if self.dragging.is_some() {
                     change_cursor_state(CursorState::Grab);
-                    entry.selected = None;
+                    self.dragging = None;
                 }
             }
             MouseEventType::Click => {}
@@ -767,15 +731,10 @@ impl Drawable for Movable {
     }
 
     fn draw(&self, ctx: &Renderer) {
-        for entry in &self.entries {
-            entry.component.draw(&ctx.translate(entry.base));
-
-            if entry.selected.is_some() {
-                let size = entry.component.size(ctx);
-                let _restore = ctx.dotted_line();
-                ctx.set_line_width(Percent::new(0.14));
-                ctx.rect(Rect { pos: entry.base, size }, None, Cow::from("black"));
-            }
+        if self.dragging.is_some() {
+            let _restore = ctx.dotted_line();
+            ctx.set_line_width(Percent::new(0.14));
+            ctx.rect(self.rect, None, Cow::from("black"));
         }
     }
 
@@ -877,18 +836,25 @@ impl Drawable for DrawableRect {
 }
 
 struct Led {
-    rect: Rect,
+    movable: Movable,
 }
 
 impl Led {
-    fn new(width: Percent) {
-        // TODO: force 16:9
+    fn new() -> Self {
+        let rect = Rect { pos: Pos::CENTER, size: Size::new(20.0, 20.0) };
+        Self { movable: Movable::new(rect) }
     }
 }
 
 impl Drawable for Led {
+    fn on_mouse_event(&mut self, ctx: &Renderer, pos: Pos, ty: MouseEventType) {
+        self.movable.on_mouse_event(ctx, pos, ty)
+    }
+
     fn draw(&self, ctx: &Renderer) {
-        let ctx = ctx.subcanbas(self.rect);
+        self.movable.draw(ctx);
+
+        let ctx = ctx.subcanbas(self.movable.rect);
         let w = Percent::new(1.0);
         let c = 50.0;
 
@@ -931,7 +897,6 @@ impl Drawable for Led {
         );
 
         // 矢印
-
         let size = 25.0;
         let ctx = ctx.subcanbas(Rect::new(38.0, 8.0, size, size / 9.0 * 16.0));
 
@@ -953,10 +918,10 @@ impl Drawable for Led {
     }
 
     fn size(&self, _ctx: &Renderer) -> Size {
-        self.rect.size
+        self.movable.rect.size
     }
 
     fn contains(&self, _ctx: &Renderer, pos: Pos) -> bool {
-        self.rect.contains(pos)
+        self.movable.rect.contains(pos)
     }
 }
