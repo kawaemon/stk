@@ -219,7 +219,7 @@ impl MainScene {
             },
             movable: Movable {
                 entries: vec![MovableEntry::new(
-                    DrawableRect { rect: Rect::new(0.0, 0.0, 10.0, 10.0) },
+                    Led { rect: Rect::new(0.0, 0.0, 20.0, 20.0) },
                     Pos::new(45.0, 45.0),
                 )],
             },
@@ -263,28 +263,18 @@ impl MainScene {
 
         let ctx = self.renderer(ctx);
 
-        ctx.rect(
-            Rect {
-                pos: Pos::ZERO,
-                size: Size { w: Percent::new(100.0), h: Percent::new(100.0) },
-            },
-            Cow::from("white"),
-            Cow::from("green"),
-        );
+        ctx.rect(Rect::FULL, Cow::from("white"), None);
 
         self.i += 1;
 
-        // framecount for debug
-        LtoR {
-            base: Pos::ZERO,
-            components: vecbox![Text {
-                pos: Pos::ZERO,
-                align: TextAlign::TopLeft,
-                text: format!("{}", self.i).into(),
-                size: Percent::new(5.0)
-            }],
+        Text {
+            pos: Pos::new(0.0, 100.0),
+            align: TextAlign::BottomLeft,
+            text: format!("f: {}", self.i).into(),
+            size: Percent::new(2.0),
         }
         .draw(&ctx);
+
         self.button.draw(&ctx);
         self.movable.draw(&ctx);
     }
@@ -396,45 +386,57 @@ impl Renderer {
         }
     }
 
+    fn debug(&self) {
+        self.rect(
+            Rect {
+                pos: Pos::ZERO,
+                size: Size { w: Percent::new(100.0), h: Percent::new(100.0) },
+            },
+            None,
+            Cow::from("blue"),
+        );
+        self.line(
+            Percent::new(0.1),
+            Pos::new(0.0, 0.0),
+            Pos::new(100.0, 100.0),
+            Cow::from("blue"),
+        );
+        self.line(
+            Percent::new(0.1),
+            Pos::new(100.0, 0.0),
+            Pos::new(0.0, 100.0),
+            Cow::from("blue"),
+        );
+        self.set_text_align(TextAlign::TopLeft);
+        self.set_font_size(Percent::new(2.0));
+        self.filled_text(
+            &format!(
+                "{}x{}->{}x{}",
+                self.canvas_size.w as u32,
+                self.canvas_size.h as u32,
+                self.size.w as u32,
+                self.size.h as u32
+            ),
+            Pos::ZERO,
+            "black",
+        );
+    }
+
     fn translate(&self, pos: Pos) -> Self {
         let pos = self.to_abs_pos(pos);
-        let me = Self {
+        Self {
             offset: pos,
             size: self.size,
             canvas_size: self.canvas_size,
             ctx: self.ctx.clone(),
-        };
-
-        let translate_debug = false;
-        if translate_debug {
-            me.rect(
-                Rect {
-                    pos: Pos::ZERO,
-                    size: Size { w: Percent::new(100.0), h: Percent::new(100.0) },
-                },
-                None,
-                Cow::from("blue"),
-            );
-            me.line(
-                Percent::new(0.2),
-                Pos::new(0.0, 50.0),
-                Pos::new(100.0, 50.0),
-            );
-            me.line(
-                Percent::new(0.2),
-                Pos::new(50.0, 0.0),
-                Pos::new(50.0, 100.0),
-            );
         }
-
-        me
     }
 
     fn subcanbas(&self, rect: Rect) -> Self {
-        let rect = self.to_abs_rect(rect);
+        let abs_rect = self.to_abs_rect(rect);
         Self {
-            offset: self.offset + rect.pos,
-            size: rect.size,
+            offset: abs_rect.pos,
+            size: abs_rect.size,
             canvas_size: self.canvas_size,
             ctx: self.ctx.clone(),
         }
@@ -470,9 +472,11 @@ impl Renderer {
     }
 
     fn set_text_align(&self, mode: TextAlign) {
+        // https://developer.mozilla.org/ja/docs/Web/API/CanvasRenderingContext2D/textAlign
         let (baseline, align) = match mode {
             TextAlign::TopLeft => ("top", "left"),
             TextAlign::Center => ("middle", "center"),
+            TextAlign::BottomLeft => ("bottom", "left"),
         };
         self.ctx.set_text_baseline(baseline);
         self.ctx.set_text_align(align);
@@ -486,11 +490,10 @@ impl Renderer {
         })
     }
 
-    fn filled_text(&self, text: &str, pos: Pos, fill_style: impl Into<Option<Cow<'static, str>>>) {
+    fn filled_text(&self, text: &str, pos: Pos, fill_style: impl Into<Cow<'static, str>>) {
         let pos = self.to_abs_pos(pos);
-        if let Some(s) = fill_style.into() {
-            self.ctx.set_fill_style(&JsValue::from_str(&s));
-        }
+        self.ctx
+            .set_fill_style(&JsValue::from_str(&fill_style.into()));
         self.ctx.fill_text(text, pos.x, pos.y).unwrap();
     }
 
@@ -517,11 +520,14 @@ impl Renderer {
         }
     }
 
-    fn line(&self, width: Percent, a: Pos, b: Pos) {
+    fn line(&self, width: Percent, a: Pos, b: Pos, stroke_style: impl Into<Cow<'static, str>>) {
         let a = self.to_abs_pos(a);
         let b = self.to_abs_pos(b);
 
+        self.ctx
+            .set_stroke_style(&JsValue::from_str(&stroke_style.into()));
         self.set_line_width(width);
+
         self.ctx.begin_path();
         self.ctx.move_to(a.x, a.y);
         self.ctx.line_to(b.x, b.y);
@@ -579,6 +585,7 @@ struct AbsoluteRect {
 struct Percent(NotNan<f64>);
 impl Percent {
     const ZERO: Self = Self(unsafe { NotNan::new_unchecked(0.0) });
+    const FULL: Self = Self(unsafe { NotNan::new_unchecked(100.0) });
     fn new(v: f64) -> Self {
         Self(NotNan::new(v).unwrap())
     }
@@ -612,6 +619,21 @@ impl Pos {
     fn new(x: f64, y: f64) -> Pos {
         Pos { x: Percent::new(x), y: Percent::new(y) }
     }
+    fn replace_y(self, y: Percent) -> Pos {
+        Pos { x: self.x, y }
+    }
+    fn rotate(self, sheta: f64) -> Pos {
+        use std::f64::consts::PI;
+        let rad = sheta / 180.0 * PI;
+        let (sin, cos) = f64::sin_cos(rad);
+        let Self { x, y } = self;
+        let (x, y) = (x.value(), y.value());
+
+        Pos {
+            x: Percent::new(x * cos - y * sin),
+            y: Percent::new(x * sin + y * cos),
+        }
+    }
 }
 #[derive(Debug, Clone, Copy)]
 struct Size {
@@ -619,6 +641,7 @@ struct Size {
     h: Percent,
 }
 impl Size {
+    const FULL: Self = Size { w: Percent::FULL, h: Percent::FULL };
     fn new(w: f64, h: f64) -> Self {
         Self { w: Percent::new(w), h: Percent::new(h) }
     }
@@ -629,6 +652,7 @@ struct Rect {
     size: Size,
 }
 impl Rect {
+    const FULL: Rect = Rect { pos: Pos::ZERO, size: Size::FULL };
     fn new(x: f64, y: f64, w: f64, h: f64) -> Self {
         Self { pos: Pos::new(x, y), size: Size::new(w, h) }
     }
@@ -768,6 +792,7 @@ impl Drawable for Movable {
 enum TextAlign {
     TopLeft,
     Center,
+    BottomLeft,
 }
 
 struct Text {
@@ -839,7 +864,7 @@ impl Drawable for DrawableRect {
         let text = "動かしてみてね";
         ctx.set_font_to_fit(text, self.rect.size.w - Percent::new(2.0));
         ctx.set_text_align(TextAlign::Center);
-        ctx.filled_text(text, self.rect.center(), None)
+        ctx.filled_text(text, self.rect.center(), "black")
     }
 
     fn size(&self, _ctx: &Renderer) -> Size {
@@ -847,8 +872,91 @@ impl Drawable for DrawableRect {
     }
 
     fn contains(&self, _ctx: &Renderer, pos: Pos) -> bool {
-        let c = self.rect.contains(pos);
-        tracing::info!(?self.rect, ?pos, ?c);
-        c
+        self.rect.contains(pos)
+    }
+}
+
+struct Led {
+    rect: Rect,
+}
+
+impl Led {
+    fn new(width: Percent) {
+        // TODO: force 16:9
+    }
+}
+
+impl Drawable for Led {
+    fn draw(&self, ctx: &Renderer) {
+        let ctx = ctx.subcanbas(self.rect);
+        let w = Percent::new(1.0);
+        let c = 50.0;
+
+        let start = Pos::new(3.0, 50.0);
+        let end = Pos::new(90.0, 50.0);
+
+        // 横線
+        ctx.line(w, start, end, "black");
+
+        // GND
+        for (i, &offx) in [10.0, 5.0, 3.0].iter().enumerate() {
+            let i = i as f64;
+            ctx.line(
+                w,
+                Pos::new(end.x.value() + i * 3.0, c - offx),
+                Pos::new(end.x.value() + i * 3.0, c + offx),
+                "black",
+            );
+        }
+
+        let offx = 20.0 / 2.0;
+        let offy = 40.0 / 2.0;
+        let triangle = [
+            Pos::new(c - offx, c + offy),
+            Pos::new(c - offx, c - offy),
+            Pos::new(c + offx, c),
+        ];
+
+        // 三角
+        ctx.line(w, triangle[0], triangle[1], "black");
+        ctx.line(w, triangle[1], triangle[2], "black");
+        ctx.line(w, triangle[2], triangle[0], "black");
+
+        // 三角の右の直線
+        ctx.line(
+            w,
+            Pos::new(c + offx, c - offy),
+            Pos::new(c + offx, c + offy),
+            "black",
+        );
+
+        // 矢印
+
+        let size = 25.0;
+        let ctx = ctx.subcanbas(Rect::new(38.0, 8.0, size, size / 9.0 * 16.0));
+
+        let draw_arrow = |start: Pos| {
+            let off = Pos::new(20.0, -20.0);
+            let w = Percent::new(4.0);
+            ctx.line(w, start, start + off, "black");
+
+            let len = 15.0;
+            let d = Pos::new(-len, 0.0);
+            ctx.line(w, start + off, start + off + d, "black");
+            let d = Pos::new(0.0, len);
+            ctx.line(w, start + off, start + off + d, "black");
+        };
+
+        let d = 14.0;
+        draw_arrow(Pos::new(c + d, 50.0));
+        draw_arrow(Pos::new(c - d, 50.0));
+    }
+
+    fn size(&self, _ctx: &Renderer) -> Size {
+        self.rect.size
+    }
+
+    fn contains(&self, _ctx: &Renderer, pos: Pos) -> bool {
+        self.rect.contains(pos)
     }
 }

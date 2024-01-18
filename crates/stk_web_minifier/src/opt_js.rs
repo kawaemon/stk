@@ -170,8 +170,6 @@ fn optimize_arrow(arrow: &mut ArrowExpr) {
         }))));
     };
 
-    println!("{arrow:#?}");
-
     #[rustfmt::skip]
     if let BlockStmtOrExpr::BlockStmt(BlockStmt { stmts: body, span: _ }) = &mut *arrow.body
         && let [
