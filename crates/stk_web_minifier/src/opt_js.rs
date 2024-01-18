@@ -5,9 +5,10 @@ use swc_core::common::input::StringInput;
 use swc_core::common::sync::Lrc;
 use swc_core::common::{FileName, SourceMap, DUMMY_SP};
 use swc_core::ecma::ast::{
-    ArrowExpr, BindingIdent, BlockStmt, BlockStmtOrExpr, CallExpr, Decl, EsVersion, Expr,
-    ExprOrSpread, ExprStmt, FnDecl, FnExpr, Function, Ident, Lit, Module, ModuleItem, Param,
-    ParenExpr, Pat, Program, RestPat, ReturnStmt, Stmt, Str, VarDecl, VarDeclKind, VarDeclarator,
+    ArrowExpr, AssignExpr, AssignOp, BinExpr, BinaryOp, BindingIdent, BlockStmt, BlockStmtOrExpr,
+    Bool, CallExpr, Callee, CatchClause, Decl, EsVersion, Expr, ExprOrSpread, ExprStmt, FnDecl,
+    FnExpr, Function, Ident, Lit, Module, ModuleItem, Param, ParenExpr, Pat, PatOrExpr, Program,
+    RestPat, ReturnStmt, Stmt, Str, TryStmt, VarDecl, VarDeclKind, VarDeclarator,
 };
 use swc_core::ecma::atoms::JsWord;
 use swc_core::ecma::codegen::text_writer::JsWriter;
@@ -15,6 +16,51 @@ use swc_core::ecma::codegen::Emitter;
 use swc_core::ecma::parser::lexer::Lexer;
 use swc_core::ecma::parser::Parser;
 use swc_core::ecma::visit::{as_folder, FoldWith, Visit, VisitMut, VisitMutWith, VisitWith};
+
+#[test]
+fn test() {
+    optimize_js(
+        r#"
+    imports.wbg.__wbg_instanceof_HtmlElement_430cfa09315574cc = function(arg0) {
+        let result;
+        try {
+            result = getObject(arg0) instanceof HTMLElement;
+        } catch (_) {
+            result = false;
+        }
+        const ret = result;
+        return ret;
+    };
+    "#,
+    );
+}
+
+pub fn polyfills() -> Stmt {
+    let js = r#"
+        const __minifier_is_instanceof = (class_, arg0) => {
+            try {
+                return getObject(arg0) instanceof class_;
+            } catch (_) {
+                return false;
+            }
+        };
+    "#;
+    let cm: Lrc<SourceMap> = Default::default();
+    let fm = cm.new_source_file(FileName::Custom("in.js".to_owned()), js.into());
+    let res = Parser::new_from(Lexer::new(
+        Default::default(),
+        EsVersion::latest(),
+        StringInput::from(&*fm),
+        None,
+    ))
+    .parse_module()
+    .unwrap();
+    let Module { span: _, body, shebang: _ } = res;
+    let [ModuleItem::Stmt(stmt)] = &body[..] else {
+        unreachable!()
+    };
+    stmt.clone()
+}
 
 pub fn optimize_js(js: impl Into<String>) -> String {
     let cm: Lrc<SourceMap> = Default::default();
@@ -27,11 +73,12 @@ pub fn optimize_js(js: impl Into<String>) -> String {
     ))
     .parse_module()
     .unwrap();
-    let module = Program::Module(module)
+    let mut module = Program::Module(module)
         .fold_with(&mut as_folder(FunctionToArrowFn))
         // worse
         // .fold_with(&mut as_folder(InternString))
         .expect_module();
+    module.body.push(ModuleItem::Stmt(polyfills()));
     let mut buf = vec![];
     Emitter {
         cfg: Default::default(),
@@ -94,6 +141,7 @@ fn function_to_arrow(mut f: Function) -> Option<ArrowExpr> {
 fn optimize_arrow(arrow: &mut ArrowExpr) {
     // from: () => { const arg_ident = init; return foo(arg_ident); }
     // to  : () => foo(init);
+    #[rustfmt::skip]
     if let BlockStmtOrExpr::BlockStmt(BlockStmt { stmts: body, span: _ }) = &mut *arrow.body
         && let [may_decl, may_ret] = &mut body[..]
         && let Stmt::Decl(Decl::Var(box VarDecl { kind: VarDeclKind::Const, declare: false, decls, span: _  })) = may_decl
@@ -107,7 +155,7 @@ fn optimize_arrow(arrow: &mut ArrowExpr) {
             span: DUMMY_SP,
             callee: callee.clone(),
             args: vec![ExprOrSpread { expr: init.clone(), spread: None }],
-            type_args: None
+            type_args: None,
         }))));
     }
 
@@ -118,9 +166,141 @@ fn optimize_arrow(arrow: &mut ArrowExpr) {
     {
         arrow.body = Box::new(BlockStmtOrExpr::Expr(Box::new(Expr::Paren(ParenExpr {
             span: DUMMY_SP,
-            expr: expr.clone()
+            expr: expr.clone(),
         }))));
     };
+
+    println!("{arrow:#?}");
+
+    #[rustfmt::skip]
+    if let BlockStmtOrExpr::BlockStmt(BlockStmt { stmts: body, span: _ }) = &mut *arrow.body
+        && let [
+            Stmt::Decl(Decl::Var(box VarDecl {
+                span: _,
+                kind: VarDeclKind::Let,
+                declare: false,
+                decls: init_decls,
+            })),
+            Stmt::Try(box TryStmt {
+                span: _,
+                block: BlockStmt { span: _, stmts: try_stmts },
+                handler:
+                    Some(CatchClause {
+                        span: _,
+                        param: Some(Pat::Ident(BindingIdent { id: Ident { span: _, sym: _catch_param_sym, optional: false }, type_ann: None })),
+                        body: BlockStmt { span: _, stmts: catch_stmts },
+                    }),
+                finalizer: None,
+            }),
+            Stmt::Decl(Decl::Var(box VarDecl {
+                span: _,
+                kind: VarDeclKind::Const,
+                declare: false,
+                decls: final_decls,
+            })),
+            Stmt::Return(ReturnStmt { span: _, arg: Some(box Expr::Ident(Ident { span: _, sym: returned_sym, optional: _ })), })
+        ] = &mut body[..]
+
+        && let [VarDeclarator {
+            span: _,
+            name:
+                Pat::Ident(BindingIdent {
+                    id: Ident { span: _, sym: res_let_sym, optional: false },
+                    type_ann: None,
+                }),
+            init: None,
+            definite: false,
+        }] = &init_decls[..]
+
+        && let [Stmt::Expr(ExprStmt {
+            span: _,
+            expr:
+                box Expr::Assign(AssignExpr {
+                    span: _,
+                    op: AssignOp::Assign,
+                    left:
+                        PatOrExpr::Pat(box Pat::Ident(BindingIdent {
+                            id: Ident { span: _, sym: trymain_assign_left_sym, optional: false },
+                            type_ann: None,
+                        })),
+                    right:
+                        box Expr::Bin(BinExpr {
+                            span: _,
+                            op: BinaryOp::InstanceOf,
+                            left:
+                                box Expr::Call(CallExpr {
+                                    span: _,
+                                    callee:
+                                        Callee::Expr(box Expr::Ident(Ident { span: _, sym: call_sym, optional: false })),
+                                    args: call_arg,
+                                    type_args: None,
+                                }),
+                            right: box Expr::Ident(Ident { span: _, sym: class, optional: false }),
+                        }),
+                }),
+        })] = &try_stmts[..]
+
+        && let [
+            VarDeclarator {
+                span: _,
+                name: Pat::Ident(BindingIdent { id: Ident { span: _, sym: final_decl_sym, optional: false }, type_ann: None }),
+                init: Some(box Expr::Ident(Ident { span: _, sym: final_decl_init_sym, optional: false })),
+                definite: false
+            }
+        ] = &final_decls[..]
+
+        && let [Stmt::Expr(ExprStmt {
+            span: _,
+            expr:
+                box Expr::Assign(AssignExpr {
+                    span: _,
+                    op: AssignOp::Assign,
+                    left:
+                        PatOrExpr::Pat(box Pat::Ident(BindingIdent {
+                            id: Ident { span: _, sym: catch_assign_left_sym, optional: false },
+                            type_ann: None,
+                        })),
+                    right: box Expr::Lit(Lit::Bool(Bool { span: _, value: false })),
+                }),
+        })] = &catch_stmts[..]
+
+        && let [Pat::Ident(BindingIdent { id: Ident { span: _, sym: arg_sym, optional: false }, type_ann: None })] = &arrow.params[..]
+        && res_let_sym == trymain_assign_left_sym
+        && call_sym == "getObject"
+        && let [ExprOrSpread { spread: None, expr: box Expr::Ident(Ident { span: _, sym: call_arg_sym, optional: false })}] = &call_arg[..]
+        && arg_sym == call_arg_sym
+        && res_let_sym == catch_assign_left_sym
+        && final_decl_init_sym == res_let_sym
+        && returned_sym == final_decl_sym
+    {
+        arrow.body = Box::new(BlockStmtOrExpr::Expr(Box::new(Expr::Call(CallExpr {
+            span: DUMMY_SP,
+            callee: Callee::Expr(Box::new(Expr::Ident(Ident {
+                span: DUMMY_SP,
+                sym: "__minifier_is_instanceof".into(),
+                optional: false,
+            }))),
+            args: vec![
+                ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(Expr::Ident(Ident {
+                        span: DUMMY_SP,
+                        sym: class.clone(),
+                        optional: false,
+                    })),
+                },
+                ExprOrSpread {
+                    spread: None,
+                    expr: Box::new(Expr::Ident(Ident {
+                        span: DUMMY_SP,
+                        sym: arg_sym.clone(),
+                        optional: false,
+                    })),
+                },
+            ],
+            type_args: None,
+        }))));
+    }
 }
 
 pub struct FunctionToArrowFn;
@@ -133,7 +313,7 @@ impl VisitMut for FunctionToArrowFn {
             && f.ident.is_none()
             && let Some(arrow_fn) = function_to_arrow(*f.function.clone())
         {
-           *n = Expr::Arrow(arrow_fn);
+            *n = Expr::Arrow(arrow_fn);
         }
 
         if let Expr::Arrow(ref mut expr) = n {

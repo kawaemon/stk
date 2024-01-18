@@ -4,6 +4,7 @@ pub mod minifier;
 use wasm_bindgen::JsValue;
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct JsError(JsValue);
 
 unsafe impl Send for JsError {}

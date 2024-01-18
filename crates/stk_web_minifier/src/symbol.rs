@@ -110,14 +110,14 @@ pub async fn minify_symbol(wasm: &mut Vec<u8>, js: &mut Vec<u8>) {
             wasmparser::Payload::MemorySection(section) => {
                 let mut encoder = wasm_encoder::MemorySection::new();
                 for memory in section {
-                    encoder.memory(memory.unwrap().try_into().unwrap());
+                    encoder.memory(memory.unwrap().into());
                 }
                 module.section(&encoder);
             }
             wasmparser::Payload::TagSection(section) => {
                 let mut encoder = wasm_encoder::TagSection::new();
                 for tag in section {
-                    encoder.tag(tag.unwrap().try_into().unwrap());
+                    encoder.tag(tag.unwrap().into());
                 }
                 module.section(&encoder);
             }
@@ -139,7 +139,7 @@ pub async fn minify_symbol(wasm: &mut Vec<u8>, js: &mut Vec<u8>) {
                     let export_name = exports_ident_map
                         .entry(export.name)
                         .or_insert_with(|| export_ident.next().unwrap());
-                    encoder.export(export_name, export.kind.try_into().unwrap(), export.index);
+                    encoder.export(export_name, export.kind.into(), export.index);
                 }
                 module.section(&encoder);
             }
