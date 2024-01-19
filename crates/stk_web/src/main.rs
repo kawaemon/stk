@@ -36,6 +36,13 @@ fn main() {
     spawn_local(run());
 }
 
+async fn run() {
+    let canvas = document().get_element_by_id("main").unwrap();
+    let canvas: HtmlCanvasElement = canvas.dyn_into().unwrap();
+
+    RenderLoop::new(canvas).run().await;
+}
+
 struct ResizeObserver {
     ws: web_sys::ResizeObserver,
     #[allow(dead_code)]
@@ -96,13 +103,6 @@ impl Future for RequestAnimationFrameFuture {
             }
         }
     }
-}
-
-async fn run() {
-    let canvas = document().get_element_by_id("main").unwrap();
-    let canvas: HtmlCanvasElement = canvas.dyn_into().unwrap();
-
-    RenderLoop::new(canvas).run().await;
 }
 
 struct RenderLoop {
@@ -204,12 +204,15 @@ impl App {
 
 struct MainScene {
     i: usize,
-    led: Led,
+    circuit: Circuit,
 }
 
 impl MainScene {
     fn new() -> Self {
-        Self { i: 0, led: Led::new() }
+        Self {
+            i: 0,
+            circuit: Circuit { components: vec![Box::new(Led::new())] },
+        }
     }
 
     fn renderer(&self, ctx: &CanvasRenderingContext2d) -> Renderer {
@@ -236,7 +239,7 @@ impl MainScene {
         let pos = Renderer::new(ctx).to_abs_pos(pos); // dirty...
         let ctx = self.renderer(ctx);
         let pos = ctx.to_rel_pos(pos);
-        self.led.on_mouse_event(&ctx, pos, ty);
+        self.circuit.on_mouse_event(&ctx, pos, ty);
     }
 
     fn render(&mut self, ctx: &CanvasRenderingContext2d) {
@@ -260,7 +263,7 @@ impl MainScene {
         }
         .draw(&ctx);
 
-        self.led.draw(&ctx);
+        self.circuit.draw(&ctx);
     }
 }
 
@@ -516,10 +519,6 @@ impl Renderer {
 
 trait Drawable: 'static {
     fn draw(&self, ctx: &Renderer);
-    fn size(&self, ctx: &Renderer) -> Size;
-
-    /// pos が自分の描画範囲に含まれているかを返す
-    fn contains(&self, ctx: &Renderer, pos: Pos) -> bool;
     fn on_mouse_event(&mut self, _ctx: &Renderer, _pos: Pos, _ty: MouseEventType) {}
 }
 
@@ -560,6 +559,10 @@ struct AbsoluteRect {
     derive_more::AddAssign,
     derive_more::Sub,
     derive_more::SubAssign,
+    derive_more::Mul,
+    derive_more::MulAssign,
+    derive_more::Div,
+    derive_more::DivAssign,
 )]
 struct Percent(NotNan<f64>);
 impl Percent {
@@ -585,6 +588,8 @@ impl Percent {
     Debug,
     Clone,
     Copy,
+    PartialEq,
+    Eq,
     derive_more::Add,
     derive_more::AddAssign,
     derive_more::Sub,
@@ -616,7 +621,7 @@ impl Pos {
         }
     }
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Div)]
 struct Size {
     w: Percent,
     h: Percent,
@@ -627,7 +632,7 @@ impl Size {
         Self { w: Percent::new(w), h: Percent::new(h) }
     }
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Rect {
     pos: Pos,
     size: Size,
@@ -648,39 +653,41 @@ impl Rect {
             y: self.pos.x + Percent::new(self.size.h.value() / 2.0),
         }
     }
-}
-
-struct LtoR {
-    base: Pos,
-    /// 各 component は pos=0,0 に描画すること
-    components: Vec<Box<dyn Drawable>>,
-}
-
-impl Drawable for LtoR {
-    fn size(&self, ctx: &Renderer) -> Size {
-        let mut w = Percent::ZERO;
-        let mut h = Percent::ZERO;
-
-        for d in &self.components {
-            let d = d.size(ctx);
-            w += d.w;
-            h = h.max(d.h);
-        }
-
-        Size { w, h }
-    }
-
-    fn draw(&self, ctx: &Renderer) {
-        let mut pos = self.base;
-        for d in &self.components {
-            d.draw(&ctx.translate(pos));
-            pos.x += d.size(ctx).w;
+    fn from_center(pos: Pos, width: Percent) -> Self {
+        let width = width.value();
+        Self {
+            pos: pos - Pos::new(width / 2.0, width / 2.0),
+            size: Size::new(width, width),
         }
     }
-
-    fn contains(&self, ctx: &Renderer, pos: Pos) -> bool {
-        Rect { pos: self.base, size: self.size(ctx) }.contains(pos)
+    fn map_in(&self, s: Self, p: Pos) -> Pos {
+        s.pos
+            + Pos::new(
+                s.size.w.value() * p.x.value() / 100.0,
+                s.size.h.value() * p.y.value() / 100.0,
+            )
     }
+    /// 横幅を縮めて 1:1 にする
+    fn a16_9_to_a1_1(&self) -> Self {
+        let shouldbe = self.size.w.value() / 16.0 * 9.0;
+        let sub = self.size.w.value() - shouldbe;
+        let off = Percent::new(sub);
+        Self {
+            // なんでか知らんけど /2.0 すると合う、、、なんで、、、、？
+            pos: Pos { x: self.pos.x + off / 2.0, y: self.pos.y },
+            size: Size { w: self.size.w - off, h: self.size.h },
+        }
+    }
+}
+
+#[test]
+fn rect_map_in_test() {
+    let base = Rect::FULL;
+    let sub = Rect {
+        pos: Pos::new(45.0, 45.0),
+        size: Size::new(10.0, 10.0),
+    };
+    assert_eq!(base.map_in(sub, Pos::CENTER), Pos::CENTER);
 }
 
 struct Dragging {
@@ -737,14 +744,6 @@ impl Drawable for Movable {
             ctx.rect(self.rect, None, Cow::from("black"));
         }
     }
-
-    fn size(&self, _ctx: &Renderer) -> Size {
-        unimplemented!()
-    }
-
-    fn contains(&self, _ctx: &Renderer, _pos: Pos) -> bool {
-        unimplemented!()
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -763,18 +762,10 @@ struct Text {
 }
 
 impl Drawable for Text {
-    fn size(&self, ctx: &Renderer) -> Size {
-        ctx.measure_text(&self.text)
-    }
-
     fn draw(&self, ctx: &Renderer) {
         ctx.set_text_align(self.align);
         ctx.set_font_size(self.size);
         ctx.filled_text(&self.text, self.pos, Cow::from("black"));
-    }
-
-    fn contains(&self, ctx: &Renderer, pos: Pos) -> bool {
-        Rect { pos: self.pos, size: self.size(ctx) }.contains(pos)
     }
 }
 
@@ -793,10 +784,6 @@ impl Drawable for Button {
         }
     }
 
-    fn size(&self, _ctx: &Renderer) -> Size {
-        self.rect.size
-    }
-
     fn draw(&self, ctx: &Renderer) {
         ctx.rect(
             self.rect,
@@ -807,48 +794,41 @@ impl Drawable for Button {
         ctx.set_font_to_fit(&self.text, self.rect.size.w - Percent::new(2.0));
         ctx.filled_text(&self.text, self.rect.center(), Cow::from("black"));
     }
-
-    fn contains(&self, _ctx: &Renderer, pos: Pos) -> bool {
-        self.rect.contains(pos)
-    }
 }
 
-struct DrawableRect {
-    rect: Rect,
+struct Port {
+    pos: Pos,
 }
 
-impl Drawable for DrawableRect {
-    fn draw(&self, ctx: &Renderer) {
-        ctx.rect(self.rect, None, Cow::from("black"));
-        let text = "動かしてみてね";
-        ctx.set_font_to_fit(text, self.rect.size.w - Percent::new(2.0));
-        ctx.set_text_align(TextAlign::Center);
-        ctx.filled_text(text, self.rect.center(), "black")
-    }
-
-    fn size(&self, _ctx: &Renderer) -> Size {
-        self.rect.size
-    }
-
-    fn contains(&self, _ctx: &Renderer, pos: Pos) -> bool {
-        self.rect.contains(pos)
-    }
+trait CircuitComponent: Drawable {
+    fn ports(&self) -> &[Port];
 }
 
 struct Led {
     movable: Movable,
+    port: Port,
 }
 
 impl Led {
     fn new() -> Self {
         let rect = Rect { pos: Pos::CENTER, size: Size::new(20.0, 20.0) };
-        Self { movable: Movable::new(rect) }
+        Self {
+            movable: Movable::new(rect),
+            port: Port { pos: Rect::FULL.map_in(rect, Pos::new(3.0, 50.0)) },
+        }
+    }
+}
+
+impl CircuitComponent for Led {
+    fn ports(&self) -> &[Port] {
+        std::slice::from_ref(&self.port)
     }
 }
 
 impl Drawable for Led {
     fn on_mouse_event(&mut self, ctx: &Renderer, pos: Pos, ty: MouseEventType) {
-        self.movable.on_mouse_event(ctx, pos, ty)
+        self.movable.on_mouse_event(ctx, pos, ty);
+        self.port.pos = Rect::FULL.map_in(self.movable.rect, Pos::new(3.0, 50.0));
     }
 
     fn draw(&self, ctx: &Renderer) {
@@ -916,12 +896,32 @@ impl Drawable for Led {
         draw_arrow(Pos::new(c + d, 50.0));
         draw_arrow(Pos::new(c - d, 50.0));
     }
+}
 
-    fn size(&self, _ctx: &Renderer) -> Size {
-        self.movable.rect.size
+struct Circuit {
+    components: Vec<Box<dyn CircuitComponent>>,
+}
+
+impl Drawable for Circuit {
+    fn on_mouse_event(&mut self, ctx: &Renderer, pos: Pos, ty: MouseEventType) {
+        for c in &mut self.components {
+            c.on_mouse_event(ctx, pos, ty);
+        }
     }
 
-    fn contains(&self, _ctx: &Renderer, pos: Pos) -> bool {
-        self.movable.rect.contains(pos)
+    fn draw(&self, ctx: &Renderer) {
+        for comp in &self.components {
+            comp.draw(ctx);
+
+            ctx.set_line_width(Percent::new(0.2));
+            let ports = comp.ports();
+            for p in ports {
+                ctx.rect(
+                    Rect::from_center(p.pos, Percent::new(2.0)).a16_9_to_a1_1(),
+                    Cow::from("white"),
+                    Cow::from("red"),
+                );
+            }
+        }
     }
 }
