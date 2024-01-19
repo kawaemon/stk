@@ -209,10 +209,7 @@ struct MainScene {
 
 impl MainScene {
     fn new() -> Self {
-        Self {
-            i: 0,
-            circuit: Circuit { components: vec![Box::new(Led::new())] },
-        }
+        Self { i: 0, circuit: Circuit::new() }
     }
 
     fn renderer(&self, ctx: &CanvasRenderingContext2d) -> Renderer {
@@ -650,7 +647,7 @@ impl Rect {
     fn center(&self) -> Pos {
         Pos {
             x: self.pos.x + Percent::new(self.size.w.value() / 2.0),
-            y: self.pos.x + Percent::new(self.size.h.value() / 2.0),
+            y: self.pos.y + Percent::new(self.size.h.value() / 2.0),
         }
     }
     fn from_center(pos: Pos, width: Percent) -> Self {
@@ -771,25 +768,12 @@ impl Drawable for Text {
 
 struct Button {
     rect: Rect,
-    on: bool,
     text: Cow<'static, str>,
 }
 
 impl Drawable for Button {
-    fn on_mouse_event(&mut self, _ctx: &Renderer, pos: Pos, ty: MouseEventType) {
-        if let MouseEventType::Click = ty {
-            if self.rect.contains(pos) {
-                self.on = !self.on;
-            }
-        }
-    }
-
     fn draw(&self, ctx: &Renderer) {
-        ctx.rect(
-            self.rect,
-            None,
-            Cow::from(if self.on { "red" } else { "black" }),
-        );
+        ctx.rect(self.rect, Cow::from("white"), Cow::from("black"));
         ctx.set_text_align(TextAlign::Center);
         ctx.set_font_to_fit(&self.text, self.rect.size.w - Percent::new(2.0));
         ctx.filled_text(&self.text, self.rect.center(), Cow::from("black"));
@@ -899,7 +883,20 @@ impl Drawable for Led {
 }
 
 struct Circuit {
+    led_add_button: Button,
     components: Vec<Box<dyn CircuitComponent>>,
+}
+
+impl Circuit {
+    fn new() -> Self {
+        Self {
+            led_add_button: Button {
+                rect: Rect::new(40.0, 90.0, 10.0, 10.0),
+                text: Cow::from("LED"),
+            },
+            components: vec![],
+        }
+    }
 }
 
 impl Drawable for Circuit {
@@ -907,9 +904,17 @@ impl Drawable for Circuit {
         for c in &mut self.components {
             c.on_mouse_event(ctx, pos, ty);
         }
+
+        if let MouseEventType::Click = ty {
+            if self.led_add_button.rect.contains(pos) {
+                self.components.push(Box::new(Led::new()));
+            }
+        }
     }
 
     fn draw(&self, ctx: &Renderer) {
+        self.led_add_button.draw(ctx);
+
         for comp in &self.components {
             comp.draw(ctx);
 
