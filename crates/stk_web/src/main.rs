@@ -687,47 +687,78 @@ fn rect_map_in_test() {
     assert_eq!(base.map_in(sub, Pos::CENTER), Pos::CENTER);
 }
 
+trait Movable: Drawable {
+    fn rect(&self) -> Rect;
+    fn move_(&mut self, pos: Pos);
+}
+
+struct MovableEntry {
+    component: Box<dyn Movable>,
+    selected: Option<Dragging>,
+}
+
 struct Dragging {
-    old_base: Pos,
+    old_pos: Pos,
     holding_from: Pos,
 }
 
-struct Movable {
-    rect: Rect,
-    dragging: Option<Dragging>,
-}
-impl Movable {
-    fn new(rect: Rect) -> Self {
-        Self { rect, dragging: None }
+impl MovableEntry {
+    fn new(c: impl Movable) -> Self {
+        Self { component: Box::new(c), selected: None }
     }
 }
-impl Drawable for Movable {
-    fn on_mouse_event(&mut self, _ctx: &Renderer, pos: Pos, ty: MouseEventType) {
+
+#[derive(Default)]
+struct MovementController {
+    /// component の onclick は呼ばれない
+    /// 各 component は 0,0 に描画すること
+    entries: Vec<MovableEntry>,
+}
+impl MovementController {
+    fn push(&mut self, movable: impl Movable) {
+        self.entries.push(MovableEntry::new(movable));
+    }
+}
+impl Drawable for MovementController {
+    fn on_mouse_event(&mut self, ctx: &Renderer, pos: Pos, ty: MouseEventType) {
+        let overlap = self.entries.iter_mut().find(|x| {
+            // let pos = ctx.to_abs_pos(pos);
+            // let ctx = ctx.translate(x.base);
+            // let pos = ctx.to_rel_pos(pos);
+            x.component.rect().contains(pos)
+        });
+
         match ty {
             MouseEventType::Down => {
-                if self.rect.contains(pos) {
+                if let Some(entry) = overlap {
                     change_cursor_state(CursorState::Grabbing);
 
-                    self.dragging = Some(Dragging { old_base: self.rect.pos, holding_from: pos });
+                    entry.selected = Some(Dragging {
+                        old_pos: entry.component.rect().pos,
+                        holding_from: pos,
+                    });
                 }
             }
             MouseEventType::Move => {
-                change_cursor_state(if self.dragging.is_some() {
+                change_cursor_state(if overlap.is_some() {
                     CursorState::Grab
                 } else {
                     CursorState::Normal
                 });
 
-                if let Some(dragging) = self.dragging.as_ref() {
+                if let Some(entry) = self.entries.iter_mut().find(|x| x.selected.is_some()) {
                     change_cursor_state(CursorState::Grabbing);
 
-                    self.rect.pos = dragging.old_base - dragging.holding_from + pos;
+                    let dragging = entry.selected.as_ref().unwrap();
+                    entry
+                        .component
+                        .move_(dragging.old_pos - dragging.holding_from + pos);
                 }
             }
             MouseEventType::Up => {
-                if self.dragging.is_some() {
+                if let Some(entry) = self.entries.iter_mut().find(|x| x.selected.is_some()) {
                     change_cursor_state(CursorState::Grab);
-                    self.dragging = None;
+                    entry.selected = None;
                 }
             }
             MouseEventType::Click => {}
@@ -735,10 +766,14 @@ impl Drawable for Movable {
     }
 
     fn draw(&self, ctx: &Renderer) {
-        if self.dragging.is_some() {
-            let _restore = ctx.dotted_line();
-            ctx.set_line_width(Percent::new(0.14));
-            ctx.rect(self.rect, None, Cow::from("black"));
+        for entry in &self.entries {
+            entry.component.draw(ctx);
+
+            if entry.selected.is_some() {
+                let _restore = ctx.dotted_line();
+                ctx.set_line_width(Percent::new(0.14));
+                ctx.rect(entry.component.rect(), None, Cow::from("black"));
+            }
         }
     }
 }
@@ -780,16 +815,18 @@ impl Drawable for Button {
     }
 }
 
+#[derive(Clone, Copy)]
 struct Port {
     pos: Pos,
 }
 
-trait CircuitComponent: Drawable {
-    fn ports(&self) -> &[Port];
+trait CircuitComponent: Movable {
+    fn ports(&self) -> Vec<Port>;
 }
 
+#[derive(Clone, Copy)]
 struct Led {
-    movable: Movable,
+    rect: Rect,
     port: Port,
 }
 
@@ -797,28 +834,35 @@ impl Led {
     fn new() -> Self {
         let rect = Rect { pos: Pos::CENTER, size: Size::new(20.0, 20.0) };
         Self {
-            movable: Movable::new(rect),
+            rect,
             port: Port { pos: Rect::FULL.map_in(rect, Pos::new(3.0, 50.0)) },
         }
     }
 }
 
+impl Movable for Led {
+    fn rect(&self) -> Rect {
+        self.rect
+    }
+
+    fn move_(&mut self, pos: Pos) {
+        self.rect.pos = pos;
+        self.port.pos = Rect::FULL.map_in(self.rect, Pos::new(3.0, 50.0));
+    }
+}
+
 impl CircuitComponent for Led {
-    fn ports(&self) -> &[Port] {
-        std::slice::from_ref(&self.port)
+    fn ports(&self) -> Vec<Port> {
+        vec![self.port]
     }
 }
 
 impl Drawable for Led {
-    fn on_mouse_event(&mut self, ctx: &Renderer, pos: Pos, ty: MouseEventType) {
-        self.movable.on_mouse_event(ctx, pos, ty);
-        self.port.pos = Rect::FULL.map_in(self.movable.rect, Pos::new(3.0, 50.0));
-    }
-
     fn draw(&self, ctx: &Renderer) {
-        self.movable.draw(ctx);
+        // self.movable.draw(ctx);
+        tracing::info!(?self.rect);
 
-        let ctx = ctx.subcanbas(self.movable.rect);
+        let ctx = ctx.subcanbas(self.rect);
         let w = Percent::new(1.0);
         let c = 50.0;
 
@@ -884,7 +928,8 @@ impl Drawable for Led {
 
 struct Circuit {
     led_add_button: Button,
-    components: Vec<Box<dyn CircuitComponent>>,
+    movement: MovementController,
+    components: Vec<CircuitComponentAdapter>,
 }
 
 impl Circuit {
@@ -894,25 +939,58 @@ impl Circuit {
                 rect: Rect::new(40.0, 90.0, 10.0, 10.0),
                 text: Cow::from("LED"),
             },
+            movement: MovementController::default(),
             components: vec![],
         }
     }
 }
 
+#[derive(Clone)]
+struct CircuitComponentAdapter(Rc<RefCell<dyn CircuitComponent>>);
+impl CircuitComponentAdapter {
+    fn new(c: impl CircuitComponent) -> Self {
+        Self(Rc::new(RefCell::new(c)))
+    }
+}
+
+impl Drawable for CircuitComponentAdapter {
+    fn draw(&self, ctx: &Renderer) {
+        self.0.borrow().draw(ctx)
+    }
+}
+impl Movable for CircuitComponentAdapter {
+    fn rect(&self) -> Rect {
+        self.0.borrow().rect()
+    }
+
+    fn move_(&mut self, pos: Pos) {
+        self.0.borrow_mut().move_(pos)
+    }
+}
+impl CircuitComponent for CircuitComponentAdapter {
+    fn ports(&self) -> Vec<Port> {
+        self.0.borrow().ports()
+    }
+}
+
 impl Drawable for Circuit {
     fn on_mouse_event(&mut self, ctx: &Renderer, pos: Pos, ty: MouseEventType) {
+        self.movement.on_mouse_event(ctx, pos, ty);
         for c in &mut self.components {
             c.on_mouse_event(ctx, pos, ty);
         }
 
         if let MouseEventType::Click = ty {
             if self.led_add_button.rect.contains(pos) {
-                self.components.push(Box::new(Led::new()));
+                let led = CircuitComponentAdapter::new(Led::new());
+                self.movement.push(led.clone());
+                self.components.push(led);
             }
         }
     }
 
     fn draw(&self, ctx: &Renderer) {
+        self.movement.draw(ctx);
         self.led_add_button.draw(ctx);
 
         for comp in &self.components {
