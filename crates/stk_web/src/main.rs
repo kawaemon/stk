@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::default;
 use std::future::Future;
+use std::mem::ManuallyDrop;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
@@ -248,7 +250,7 @@ impl MainScene {
 
         let ctx = self.renderer(ctx);
 
-        ctx.rect(Rect::FULL, Cow::from("white"), None);
+        ctx.rect(Percent::new(0.2), Rect::FULL, Cow::from("white"), None);
 
         self.i += 1;
 
@@ -279,6 +281,7 @@ enum CursorState {
     Normal,
     Grab,
     Grabbing,
+    Move,
 }
 impl CursorState {
     fn to_css(self) -> &'static str {
@@ -286,10 +289,12 @@ impl CursorState {
             CursorState::Normal => "default",
             CursorState::Grab => "grab",
             CursorState::Grabbing => "grabbing",
+            CursorState::Move => "move",
         }
     }
 }
 
+// FIXME: 1 レンダーごとに初期化、適用を遅延
 fn change_cursor_state(s: CursorState) {
     let el = document().get_element_by_id("main").unwrap();
     let el: HtmlElement = el.dyn_into().unwrap();
@@ -367,6 +372,7 @@ impl Renderer {
 
     fn debug(&self) {
         self.rect(
+            Percent::new(0.2),
             Rect {
                 pos: Pos::ZERO,
                 size: Size { w: Percent::new(100.0), h: Percent::new(100.0) },
@@ -478,6 +484,7 @@ impl Renderer {
 
     fn rect(
         &self,
+        line_width: Percent,
         rect: Rect,
         fill_style: impl Into<Option<Cow<'static, str>>>,
         stroke_style: impl Into<Option<Cow<'static, str>>>,
@@ -486,6 +493,8 @@ impl Renderer {
 
         let fill_style = fill_style.into();
         let stroke_style = stroke_style.into();
+
+        self.set_line_width(line_width);
 
         if let Some(s) = fill_style {
             self.ctx.set_fill_style(&JsValue::from_str(&s));
@@ -721,18 +730,14 @@ impl MovementController {
 }
 impl Drawable for MovementController {
     fn on_mouse_event(&mut self, ctx: &Renderer, pos: Pos, ty: MouseEventType) {
-        let overlap = self.entries.iter_mut().find(|x| {
-            // let pos = ctx.to_abs_pos(pos);
-            // let ctx = ctx.translate(x.base);
-            // let pos = ctx.to_rel_pos(pos);
-            x.component.rect().contains(pos)
-        });
+        let overlap = self
+            .entries
+            .iter_mut()
+            .find(|x| x.component.rect().contains(pos));
 
         match ty {
             MouseEventType::Down => {
                 if let Some(entry) = overlap {
-                    change_cursor_state(CursorState::Grabbing);
-
                     entry.selected = Some(Dragging {
                         old_pos: entry.component.rect().pos,
                         holding_from: pos,
@@ -741,14 +746,13 @@ impl Drawable for MovementController {
             }
             MouseEventType::Move => {
                 change_cursor_state(if overlap.is_some() {
-                    CursorState::Grab
+                    CursorState::Move
                 } else {
                     CursorState::Normal
                 });
 
                 if let Some(entry) = self.entries.iter_mut().find(|x| x.selected.is_some()) {
-                    change_cursor_state(CursorState::Grabbing);
-
+                    change_cursor_state(CursorState::Normal);
                     let dragging = entry.selected.as_ref().unwrap();
                     entry
                         .component
@@ -757,7 +761,7 @@ impl Drawable for MovementController {
             }
             MouseEventType::Up => {
                 if let Some(entry) = self.entries.iter_mut().find(|x| x.selected.is_some()) {
-                    change_cursor_state(CursorState::Grab);
+                    change_cursor_state(CursorState::Move);
                     entry.selected = None;
                 }
             }
@@ -772,7 +776,12 @@ impl Drawable for MovementController {
             if entry.selected.is_some() {
                 let _restore = ctx.dotted_line();
                 ctx.set_line_width(Percent::new(0.14));
-                ctx.rect(entry.component.rect(), None, Cow::from("black"));
+                ctx.rect(
+                    Percent::new(0.2),
+                    entry.component.rect(),
+                    None,
+                    Cow::from("black"),
+                );
             }
         }
     }
@@ -808,7 +817,12 @@ struct Button {
 
 impl Drawable for Button {
     fn draw(&self, ctx: &Renderer) {
-        ctx.rect(self.rect, Cow::from("white"), Cow::from("black"));
+        ctx.rect(
+            Percent::new(0.2),
+            self.rect,
+            Cow::from("white"),
+            Cow::from("black"),
+        );
         ctx.set_text_align(TextAlign::Center);
         ctx.set_font_to_fit(&self.text, self.rect.size.w - Percent::new(2.0));
         ctx.filled_text(&self.text, self.rect.center(), Cow::from("black"));
@@ -817,6 +831,8 @@ impl Drawable for Button {
 
 #[derive(Clone, Copy)]
 struct Port {
+    /// must be unique in single component.
+    name: &'static str,
     pos: Pos,
 }
 
@@ -831,11 +847,15 @@ struct Led {
 }
 
 impl Led {
+    fn port_pos(rect: Rect) -> Pos {
+        Rect::FULL.map_in(rect, Pos::new(3.0, 50.0))
+    }
+
     fn new() -> Self {
         let rect = Rect { pos: Pos::CENTER, size: Size::new(20.0, 20.0) };
         Self {
             rect,
-            port: Port { pos: Rect::FULL.map_in(rect, Pos::new(3.0, 50.0)) },
+            port: Port { name: "anode", pos: Self::port_pos(rect) },
         }
     }
 }
@@ -847,7 +867,7 @@ impl Movable for Led {
 
     fn move_(&mut self, pos: Pos) {
         self.rect.pos = pos;
-        self.port.pos = Rect::FULL.map_in(self.rect, Pos::new(3.0, 50.0));
+        self.port.pos = Self::port_pos(self.rect);
     }
 }
 
@@ -859,9 +879,6 @@ impl CircuitComponent for Led {
 
 impl Drawable for Led {
     fn draw(&self, ctx: &Renderer) {
-        // self.movable.draw(ctx);
-        tracing::info!(?self.rect);
-
         let ctx = ctx.subcanbas(self.rect);
         let w = Percent::new(1.0);
         let c = 50.0;
@@ -926,9 +943,104 @@ impl Drawable for Led {
     }
 }
 
+#[allow(clippy::borrowed_box)]
+fn get_heap_addr<T: ?Sized>(b: &Box<T>) -> usize {
+    use std::mem::MaybeUninit;
+    let mut copied: MaybeUninit<Box<T>> = MaybeUninit::uninit();
+
+    unsafe {
+        std::intrinsics::copy_nonoverlapping(b, copied.as_mut_ptr(), 1);
+        let copied = copied.assume_init();
+        Box::leak(copied) as *mut _ as *mut () as _
+    }
+}
+
+struct Wiring {
+    component_addr: usize,
+    port_name: &'static str,
+    cursor: Pos,
+}
+
+#[derive(Default)]
+struct WireController {
+    components: Vec<Box<dyn CircuitComponent>>,
+    wiring: Option<Wiring>,
+}
+impl WireController {
+    fn push(&mut self, c: impl CircuitComponent) {
+        self.components.push(Box::new(c));
+    }
+    fn port_rect(pos: Pos) -> Rect {
+        Rect::from_center(pos, Percent::new(2.0)).a16_9_to_a1_1()
+    }
+}
+impl Drawable for WireController {
+    fn on_mouse_event(&mut self, _ctx: &Renderer, pos: Pos, ty: MouseEventType) {
+        let overlap = self
+            .components
+            .iter()
+            .flat_map(|comp| comp.ports().into_iter().map(move |port| (comp, port)))
+            .find(|(_comp, port)| Self::port_rect(port.pos).contains(pos));
+
+        match ty {
+            MouseEventType::Down => {
+                if let Some((comp, port)) = overlap {
+                    self.wiring = Some(Wiring {
+                        component_addr: get_heap_addr(comp),
+                        port_name: port.name,
+                        cursor: pos,
+                    })
+                }
+            }
+            MouseEventType::Move => {
+                if let Some(wiring) = self.wiring.as_mut() {
+                    wiring.cursor = pos;
+                }
+
+                match (self.wiring.is_some(), overlap.is_some()) {
+                    (false, false) => change_cursor_state(CursorState::Normal),
+                    (false, true) => change_cursor_state(CursorState::Grab),
+                    (true, false) => change_cursor_state(CursorState::Grabbing),
+                    (true, true) => change_cursor_state(CursorState::Normal),
+                }
+            }
+            MouseEventType::Up => {}
+            MouseEventType::Click => {}
+        }
+    }
+
+    fn draw(&self, ctx: &Renderer) {
+        for c in &self.components {
+            for p in c.ports() {
+                ctx.rect(
+                    Percent::new(0.2),
+                    Self::port_rect(p.pos),
+                    Cow::from("white"),
+                    Cow::from("red"),
+                );
+            }
+        }
+
+        if let Some(wiring) = self.wiring.as_ref() {
+            let comp = self
+                .components
+                .iter()
+                .find(|x| get_heap_addr(x) == wiring.component_addr)
+                .expect("無からドラッグするな");
+            let port = comp.ports();
+            let port = port
+                .iter()
+                .find(|x| x.name == wiring.port_name)
+                .expect("無からドラッグするな(ポート)");
+            ctx.line(Percent::new(0.1), port.pos, wiring.cursor, "black");
+        }
+    }
+}
+
 struct Circuit {
     led_add_button: Button,
     movement: MovementController,
+    wire: WireController,
     components: Vec<CircuitComponentAdapter>,
 }
 
@@ -936,12 +1048,46 @@ impl Circuit {
     fn new() -> Self {
         Self {
             led_add_button: Button {
-                rect: Rect::new(40.0, 90.0, 10.0, 10.0),
+                rect: Rect::new(45.0, 90.0, 10.0, 10.0),
                 text: Cow::from("LED"),
             },
+            wire: WireController::default(),
             movement: MovementController::default(),
             components: vec![],
         }
+    }
+}
+
+impl Drawable for Circuit {
+    fn on_mouse_event(&mut self, ctx: &Renderer, pos: Pos, ty: MouseEventType) {
+        if self.wire.wiring.is_none() {
+            self.movement.on_mouse_event(ctx, pos, ty);
+        }
+
+        self.wire.on_mouse_event(ctx, pos, ty);
+
+        for c in &mut self.components {
+            c.on_mouse_event(ctx, pos, ty);
+        }
+
+        if let MouseEventType::Click = ty {
+            if self.led_add_button.rect.contains(pos) {
+                let led = CircuitComponentAdapter::new(Led::new());
+                self.movement.push(led.clone());
+                self.wire.push(led.clone());
+                self.components.push(led);
+            }
+        }
+    }
+
+    fn draw(&self, ctx: &Renderer) {
+        for comp in &self.components {
+            comp.draw(ctx);
+        }
+
+        self.movement.draw(ctx);
+        self.wire.draw(ctx);
+        self.led_add_button.draw(ctx);
     }
 }
 
@@ -952,7 +1098,6 @@ impl CircuitComponentAdapter {
         Self(Rc::new(RefCell::new(c)))
     }
 }
-
 impl Drawable for CircuitComponentAdapter {
     fn draw(&self, ctx: &Renderer) {
         self.0.borrow().draw(ctx)
@@ -970,41 +1115,5 @@ impl Movable for CircuitComponentAdapter {
 impl CircuitComponent for CircuitComponentAdapter {
     fn ports(&self) -> Vec<Port> {
         self.0.borrow().ports()
-    }
-}
-
-impl Drawable for Circuit {
-    fn on_mouse_event(&mut self, ctx: &Renderer, pos: Pos, ty: MouseEventType) {
-        self.movement.on_mouse_event(ctx, pos, ty);
-        for c in &mut self.components {
-            c.on_mouse_event(ctx, pos, ty);
-        }
-
-        if let MouseEventType::Click = ty {
-            if self.led_add_button.rect.contains(pos) {
-                let led = CircuitComponentAdapter::new(Led::new());
-                self.movement.push(led.clone());
-                self.components.push(led);
-            }
-        }
-    }
-
-    fn draw(&self, ctx: &Renderer) {
-        self.movement.draw(ctx);
-        self.led_add_button.draw(ctx);
-
-        for comp in &self.components {
-            comp.draw(ctx);
-
-            ctx.set_line_width(Percent::new(0.2));
-            let ports = comp.ports();
-            for p in ports {
-                ctx.rect(
-                    Rect::from_center(p.pos, Percent::new(2.0)).a16_9_to_a1_1(),
-                    Cow::from("white"),
-                    Cow::from("red"),
-                );
-            }
-        }
     }
 }
