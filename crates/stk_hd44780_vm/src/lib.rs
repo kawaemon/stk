@@ -183,7 +183,7 @@ impl PinObserver for Hd44780 {
             return;
         };
 
-        tracing::info!("{inst:?}");
+        tracing::info!("{inst:?}\n");
 
         self.exec(inst);
     }
@@ -200,6 +200,18 @@ impl Hd44780 {
             config: Config::new(),
             bus_state: BusState::new(),
         }
+    }
+
+    fn debug_print_ddram(&self) {
+        println!("################");
+        for i in 0..16 {
+            print!("{}", CGROM[self.ddram[i] as usize]);
+        }
+        println!();
+        for i in 0..16 {
+            print!("{}", CGROM[self.ddram[0x40 + i] as usize]);
+        }
+        println!("\n################");
     }
 
     fn exec(&mut self, inst: Instruction) {
@@ -252,6 +264,13 @@ impl Hd44780 {
                 }
 
                 self.ddram[self.ac_ddram as usize] = data;
+                self.debug_print_ddram();
+
+                if self.config.increment {
+                    self.ac_ddram += 1;
+                } else {
+                    self.ac_ddram -= 1;
+                }
             }
         }
     }

@@ -97,6 +97,9 @@ fn main() {
                 (true, true) | (false, false) => None,
             };
             self.before_e = Self::e(reg);
+            if let Some(rec) = rec.as_ref() {
+                tracing::info!("{rec:?}");
+            }
             rec
         }
     }
