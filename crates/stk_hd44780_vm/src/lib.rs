@@ -395,17 +395,12 @@ impl Instruction {
                         rl: l != 0,
                     }),
                     m_001d_nfxx => return Some(Self::FunctionSet {
-                        dl: (x & 0b0001_0000) != 0,
-                        n: (x & 0b0000_1000) != 0,
-                        f: (x & 0b0000_0100) != 0,
+                        dl: d != 0,
+                        n: n != 0,
+                        f: f != 0,
                     }),
-                    m_11aa_aaaa => return Some(Self::CgRamAddressSet { addr: a }),
-
-                    // P31
-                    // RS RW DB
-                    // 1  0  D
+                    m_01aa_aaaa => return Some(Self::CgRamAddressSet { addr: a }),
                     m_1aaa_aaaa => return Some(Self::DdRamAddressSet { addr: a }),
-
                     _ => {},
                 }
             }
