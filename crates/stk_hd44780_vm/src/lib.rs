@@ -205,11 +205,20 @@ impl Hd44780 {
     fn debug_print_ddram(&self) {
         println!("################");
         for i in 0..16 {
-            print!("{}", CGROM[self.ddram[i] as usize]);
+            if self.ac_ddram == i {
+                print!("█");
+            } else {
+                print!("{}", CGROM[self.ddram[i as usize] as usize]);
+            }
         }
         println!();
         for i in 0..16 {
-            print!("{}", CGROM[self.ddram[0x40 + i] as usize]);
+            let i = 0x40 + i;
+            if self.ac_ddram == i {
+                print!("█");
+            } else {
+                print!("{}", CGROM[self.ddram[i as usize] as usize]);
+            }
         }
         println!("\n################");
     }
@@ -264,13 +273,14 @@ impl Hd44780 {
                 }
 
                 self.ddram[self.ac_ddram as usize] = data;
-                self.debug_print_ddram();
 
                 if self.config.increment {
                     self.ac_ddram += 1;
                 } else {
                     self.ac_ddram -= 1;
                 }
+
+                self.debug_print_ddram();
             }
         }
     }
